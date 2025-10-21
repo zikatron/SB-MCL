@@ -27,23 +27,43 @@ parser.add_argument('--config', '-c')
 parser.add_argument('--model-config', '-mc')
 parser.add_argument('--data-config', '-dc')
 parser.add_argument('--log-dir', '-l')
-parser.add_argument('--override', '-o', default='')
-parser.add_argument('--resume', action='store_true')
-parser.add_argument('--no-backup', action='store_true')
+parser.add_argument('--override', '-o', default='') # NEW: allows you to override config options via command line without editing the config file.
+parser.add_argument('--resume', action='store_true') # NEW: continue from where you left off if a checkpoint exists.
+parser.add_argument('--no-backup', action='store_true') # NEW: do not backup code to log directory.
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 
 def get_config(config_path):
+    """
+    Load a configuration from a YAML file with support for including other config files.
+    
+    NEW: This is how the function works:
+    1. Load the YAML file specified by config_path
+    2. If it has an 'include' key:
+       a. Load all those included files first (recursively)
+       b. Start with values from the included files
+       c. Then apply values from the current file on top
+    
+    NEW: This means values in the current file will override any values from included files.
+    For example, if base.yaml has batch_size=32 and model.yaml includes base.yaml but sets
+    batch_size=64, the final config will have batch_size=64.
+    
+    Args:
+        config_path (str): Path to the YAML configuration file
+        
+    Returns:
+        dict: The merged configuration dictionary
+    """
     with open(config_path, 'r') as f:
-        new_config = yaml.full_load(f)
+        new_config = yaml.full_load(f) # returns a python dict
     config = {}
     if 'include' in new_config:
         includes = new_config['include'] if isinstance(new_config['include'], list) else [new_config['include']]
         for include in includes:
             include_config = get_config(include)
-            config.update(include_config)
+            config.update(include_config) # merges two dictionaries
         del new_config['include']
     config.update(new_config)
     return config
@@ -132,6 +152,7 @@ def main():
 
 
 def train(rank, world_size, port, args, config):
+    # TODO Disable TensorBoard and log on WandB
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = str(port)
 
@@ -146,8 +167,9 @@ def train(rank, world_size, port, args, config):
         raise RuntimeError(f'GPU malfunction. Reset required for {socket.gethostname()} rank {rank} in [{gpu_ids}]')
 
     writer = None
-    if rank == 0:
-        writer = SummaryWriter(config['log_dir'], flush_secs=15)
+    # * Commenting out TensorBoard for WandB logging
+    # if rank == 0:
+    #     writer = SummaryWriter(config['log_dir'], flush_secs=15) 
 
     # Build model
     model = MODEL[config['model']](config).to(rank)
@@ -251,6 +273,9 @@ def train(rank, world_size, port, args, config):
                 est_total = str(est_total).split('.')[0]
                 meta_train_loss = output['loss/meta_train'].mean()
                 print(f'\r[Step {step}] [{elapsed_time} / {est_total}] Meta-train loss: {meta_train_loss:.6f}', end='')
+                if 'acc/meta_train' in output:
+                    meta_train_acc = output['acc/meta_train'].mean()
+                    print(f' | Meta-train acc: {meta_train_acc:.6f}', end='')
 
                 if torch.isnan(meta_train_loss).any().item():
                     raise RuntimeError('NaN loss encountered')
@@ -304,6 +329,8 @@ def train(rank, world_size, port, args, config):
                         output.summarize(writer, step)
                         meta_test_loss = output['loss/meta_test'].mean()
                         print(f'[Step {step}] Meta-test loss: {meta_test_loss:.6f}')
+                        meta_test_acc = output['acc/meta_test'].mean()
+                        print(f' | Meta-test acc: {meta_test_acc:.4f}', end='')
 
             model.train()
 
@@ -324,6 +351,12 @@ def train(rank, world_size, port, args, config):
 
 
 def forward_backward(model, train_x, train_y, test_x, test_y, batch_size, config, summarize=False):
+    """
+    Simply does the forward and backward pass.
+
+    Returns:
+        Output: The output object.
+    """
     output = model(train_x, train_y, test_x, test_y, summarize=summarize, meta_split='train')
     loss_sum = output['loss/meta_train'].sum()
     if 'attn_loss_sum/meta_train' in output and config['attn_loss'] > 0:
@@ -335,6 +368,24 @@ def forward_backward(model, train_x, train_y, test_x, test_y, batch_size, config
 
 
 def prepare_data(*data, rank=0):
+    """
+    NEW: Prepares input data for model processing by moving tensors to the specified GPU and normalizing image data.
+    
+    NEW: This function:
+    1. Moves all PyTorch tensors to the GPU device specified by rank
+    2. Converts uint8 image tensors (0-255 range) to float tensors in the [-1, 1] range
+    3. Passes through non-tensor data unchanged
+    
+    NEW: Usage:
+        train_x, train_y, test_x, test_y = prepare_data(train_x, train_y, test_x, test_y, rank=gpu_id)
+    
+    Args:
+        *data: Any number of input tensors or other data types
+        rank (int, optional): GPU device ID to move tensors to. Defaults to 0.
+        
+    Returns:
+        list: The processed data items in the same order they were provided
+    """
     prepared_data = []
     for d in data:
         if isinstance(d, torch.Tensor):
