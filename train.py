@@ -20,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from dataset import DATASET
 from models import MODEL
 from models.model import Output
-from utils import Timer
+from utils import Timer, init_wandb
 
 parser = ArgumentParser()
 parser.add_argument('--config', '-c')
@@ -70,9 +70,12 @@ def get_config(config_path):
 
 
 def main():
+    os.environ['WANDB_API_KEY'] = 'af68f61230db91e3ba854d69c29437700c715fc4'
+
     if torch.cuda.is_available():
         print(f'Running on {socket.gethostname()} | {torch.cuda.device_count()}x {torch.cuda.get_device_name()}')
     args = parser.parse_args()
+
 
     # Load config
     if args.config is None:
@@ -117,6 +120,7 @@ def main():
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
     print(f'Config saved to {config_save_path}')
+    wandb_logger = init_wandb(config, name=config['model'])
 
     # Save code
     if not args.no_backup:
@@ -213,6 +217,10 @@ def train(rank, world_size, port, args, config):
 
     # Main training loop
     start_time = datetime.now()
+    meta_test_loss = 0
+    meta_test_acc = 0
+
+
     print(f'Training started at {start_time}')
     for step in range(start_step + 1, config['max_train_steps'] + 1):
         train_x, train_y, test_x, test_y = next(meta_train_loader_iter)
@@ -273,9 +281,15 @@ def train(rank, world_size, port, args, config):
                 est_total = str(est_total).split('.')[0]
                 meta_train_loss = output['loss/meta_train'].mean()
                 print(f'\r[Step {step}] [{elapsed_time} / {est_total}] Meta-train loss: {meta_train_loss:.6f}', end='')
-                if 'acc/meta_train' in output:
-                    meta_train_acc = output['acc/meta_train'].mean()
-                    print(f' | Meta-train acc: {meta_train_acc:.6f}', end='')
+                meta_train_acc = output['acc/meta_train'].mean()
+                print(f' | Meta-train acc: {meta_train_acc:.6f}', end='')
+
+                wandb_logger.log({
+                "train_accuracy": meta_train_acc,
+                "train_meta_loss": meta_train_loss,
+                "test_accuracy": meta_test_acc,
+                "test_meta_loss": meta_test_loss,
+            }, step=step)
 
                 if torch.isnan(meta_train_loss).any().item():
                     raise RuntimeError('NaN loss encountered')
@@ -333,7 +347,7 @@ def train(rank, world_size, port, args, config):
                         print(f' | Meta-test acc: {meta_test_acc:.4f}', end='')
 
             model.train()
-
+    wandb.finish()
     if rank == 0:
         writer.flush()
         end_time = datetime.now()

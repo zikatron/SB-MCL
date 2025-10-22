@@ -1,6 +1,7 @@
 import math
 import time
 from collections import defaultdict
+import wandb
 
 import torch
 import torch.nn as nn
@@ -109,3 +110,27 @@ def nll_to_bpd(nll, dims):
 def reparameterize(mean, log_var):
     noise = torch.randn(mean.shape, device=mean.device)
     return noise * torch.exp(log_var * 0.5) + mean
+
+def init_wandb(config, name, tags=None, group=None, notes=None):
+    """
+    Initialize a new W&B run.
+    
+    Args:
+        config (dict): Configuration parameters for the run (script arguments)
+        name (str): Name of the run, should match CSV file name
+        tags (list, optional): Tags for categorizing the run. Defaults to None.
+        group (str, optional): Group name to organize related runs. Defaults to None.
+        notes (str, optional): Additional notes about the run. Defaults to None.
+        
+    Returns:
+        wandb.Run: The initialized W&B run object
+    """
+    return wandb.init(
+        entity="bytefuse",
+        project="pushing-the-limits-of-meta-cl",
+        config=config,
+        name=name,
+        tags=tags,
+        group=group,
+        notes=notes
+    )
