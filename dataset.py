@@ -149,7 +149,7 @@ class MetaCasia(IterableDataset):
 
         if self.meta_train_classes is None:
             classes = list(self.x_dict.keys())
-            random.seed(0)  # Make sure the same splits are used for all runs
+            random.seed(42)  # Make sure the same splits are used for all runs
             random.shuffle(classes)
             type(self).meta_train_classes = classes[config['meta_test_tasks']:]
             type(self).meta_test_classes = classes[:config['meta_test_tasks']]
