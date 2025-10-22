@@ -120,7 +120,7 @@ def main():
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
     print(f'Config saved to {config_save_path}')
-    wandb_logger = init_wandb(config, name=config['model'])
+    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA")
 
     # Save code
     if not args.no_backup:

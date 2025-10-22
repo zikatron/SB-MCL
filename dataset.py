@@ -10,7 +10,7 @@ from glob import glob
 from io import BytesIO
 from multiprocessing import Pool
 
-import cv2
+# import cv2
 import numpy as np
 import torch
 from PIL import Image
