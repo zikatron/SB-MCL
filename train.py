@@ -22,6 +22,8 @@ from models import MODEL
 from models.model import Output
 from utils import Timer, init_wandb
 
+import wandb
+
 parser = ArgumentParser()
 parser.add_argument('--config', '-c')
 parser.add_argument('--model-config', '-mc')
