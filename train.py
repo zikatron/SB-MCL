@@ -152,11 +152,10 @@ def main():
         config['eval_batch_size'] //= world_size
         mp.spawn(train, args=(world_size, ddp_port, args, config), nprocs=world_size)
     else:
-        train(0, 1, ddp_port, args, config)
+        train(0, 1, ddp_port, args, config, wandb_logger)
 
 
-def train(rank, world_size, port, args, config):
-    # TODO Disable TensorBoard and log on WandB
+def train(rank, world_size, port, args, config, wandb_logger):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = str(port)
 
@@ -171,7 +170,6 @@ def train(rank, world_size, port, args, config):
         raise RuntimeError(f'GPU malfunction. Reset required for {socket.gethostname()} rank {rank} in [{gpu_ids}]')
 
     writer = None
-    # * Commenting out TensorBoard for WandB logging
     if rank == 0:
         writer = SummaryWriter(config['log_dir'], flush_secs=15) 
 
