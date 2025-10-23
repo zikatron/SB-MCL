@@ -219,6 +219,7 @@ def train(rank, world_size, port, args, config):
     start_time = datetime.now()
     meta_test_loss = 0
     meta_test_acc = 0
+    meta_train_acc = 0
 
 
     print(f'Training started at {start_time}')
