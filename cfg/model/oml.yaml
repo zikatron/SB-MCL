@@ -20,4 +20,4 @@ maml_mlp_args:
 decoder: Identity
 dec_args: {}
 
-reptile: True
+reptile: False
