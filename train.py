@@ -172,8 +172,8 @@ def train(rank, world_size, port, args, config):
 
     writer = None
     # * Commenting out TensorBoard for WandB logging
-    # if rank == 0:
-    #     writer = SummaryWriter(config['log_dir'], flush_secs=15) 
+    if rank == 0:
+        writer = SummaryWriter(config['log_dir'], flush_secs=15) 
 
     # Build model
     model = MODEL[config['model']](config).to(rank)
