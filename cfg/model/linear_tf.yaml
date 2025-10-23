@@ -5,4 +5,4 @@ tf_attn: elu  # vanilla or elu (Linear Transformer) or favor (Performer)
 qk_dim: 512
 v_dim: 512
 
-y_vocab: 50
+y_vocab: 1000
