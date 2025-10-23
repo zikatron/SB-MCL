@@ -280,8 +280,8 @@ def train(rank, world_size, port, args, config, wandb_logger):
                 est_total = str(est_total).split('.')[0]
                 meta_train_loss = output['loss/meta_train'].mean()
                 print(f'\r[Step {step}] [{elapsed_time} / {est_total}] Meta-train loss: {meta_train_loss:.6f}', end='')
-                if 'acc/meta_train' in output:
-                    meta_train_acc = output['acc/meta_train'].mean()
+                if 'acc/train' in output:
+                    meta_train_acc = output['acc/train'].mean()
                 print(f' | Meta-train acc: {meta_train_acc:.6f}', end='')
 
                 wandb_logger.log({
@@ -343,8 +343,8 @@ def train(rank, world_size, port, args, config, wandb_logger):
                         output.summarize(writer, step)
                         meta_test_loss = output['loss/meta_test'].mean()
                         print(f'[Step {step}] Meta-test loss: {meta_test_loss:.6f}')
-                        if 'acc/meta_test' in output:
-                            meta_test_acc = output['acc/meta_test'].mean()
+                        if 'acc/test' in output:
+                            meta_test_acc = output['acc/test'].mean()
                         print(f' | Meta-test acc: {meta_test_acc:.4f}', end='')
 
             model.train()
