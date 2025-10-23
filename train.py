@@ -150,7 +150,7 @@ def main():
         config['batch_size'] //= world_size
         assert config['eval_batch_size'] % world_size == 0, 'Eval batch size must be divisible by the number of GPUs.'
         config['eval_batch_size'] //= world_size
-        mp.spawn(train, args=(world_size, ddp_port, args, config), nprocs=world_size)
+        mp.spawn(train, args=(world_size, ddp_port, args, config, wandb_logger), nprocs=world_size)
     else:
         train(0, 1, ddp_port, args, config, wandb_logger)
 
