@@ -15,12 +15,12 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
+import wandb
 from dataset import DATASET
 from models import MODEL
 from models.model import Output
 from train import get_config, prepare_data
-from utils import Timer
+from utils import Timer,init_wandb
 
 parser = ArgumentParser()
 parser.add_argument('--config', '-c')
@@ -36,6 +36,8 @@ torch.backends.cudnn.allow_tf32 = True
 
 
 def main():
+    os.environ['WANDB_API_KEY'] = 'af68f61230db91e3ba854d69c29437700c715fc4'
+
     if torch.cuda.is_available():
         print(f'Running on {socket.gethostname()} | {torch.cuda.device_count()}x {torch.cuda.get_device_name()}')
     args = parser.parse_args()
@@ -83,6 +85,8 @@ def main():
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
     print(f'Config saved to {config_save_path}')
+    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA_single_episode")
+
 
     # Save code
     if not args.no_backup:
@@ -112,12 +116,12 @@ def main():
         config['batch_size'] //= world_size
         assert config['eval_batch_size'] % world_size == 0, 'Eval batch size must be divisible by the number of GPUs.'
         config['eval_batch_size'] //= world_size
-        mp.spawn(train, args=(world_size, ddp_port, args, config), nprocs=world_size)
+        mp.spawn(train, args=(world_size, ddp_port, args, config, wandb_logger), nprocs=world_size)
     else:
-        train(0, 1, ddp_port, args, config)
+        train(0, 1, ddp_port, args, config, wandb_logger)
 
 
-def train(rank, world_size, port, args, config):
+def train(rank, world_size, port, args, config, wandb_logger):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = str(port)
 
@@ -174,12 +178,18 @@ def train(rank, world_size, port, args, config):
             train_set, batch_size=config['batch_size'],
             sampler=torch.utils.data.RandomSampler(
                 train_set, replacement=True, num_samples=config['batch_size'] * config['max_train_steps']))
+    # 
     test_loader = DataLoader(test_set, batch_size=config['eval_batch_size'], shuffle=False)
 
     # Main training loop
-    best_step, best_test_loss = 0, torch.inf
+    best_step, best_test_loss, best_test_acc = 0, torch.inf, 0
     start_time = datetime.now()
     print(f'Training started at {start_time}')
+
+    test_loss = 0
+    test_acc = 0
+    train_acc = 0
+
     for step, (train_x, train_y) in enumerate(train_loader, start=1):
         train_x, train_y = prepare_data(train_x, train_y, rank=rank)
 
@@ -208,6 +218,14 @@ def train(rank, world_size, port, args, config):
             est_total = str(est_total).split('.')[0]
             train_loss = output['loss/train'].mean()
             print(f'\r[Step {step}] [{elapsed_time} / {est_total}] Train loss: {train_loss:.6f}', end='')
+            if 'acc/train' in output:
+                train_acc = output['acc/train'].mean()
+            wandb_logger.log({
+            "train_accuracy": train_acc,
+            "train_loss": train_loss,
+            "test_accuracy": test_acc,
+            "test_loss": test_loss,
+        }, step=step)
 
             if torch.isnan(train_loss).any().item():
                 raise RuntimeError('NaN loss encountered')
@@ -227,10 +245,13 @@ def train(rank, world_size, port, args, config):
             if rank == 0:
                 output.summarize(writer, step)
                 test_loss = output['loss/test'].mean()
+                if 'acc/test' in output:
+                    test_acc = output['acc/test'].mean()
                 print(f'[Step {step}] Test loss: {test_loss:.6f}')
                 if test_loss < best_test_loss:
                     best_test_loss = test_loss
                     best_step = step
+                    best_test_acc = test_acc
             model.train()
 
     if rank == 0:
@@ -256,8 +277,11 @@ def train(rank, world_size, port, args, config):
                 'step': step,
                 'end_time': end_time,
                 'best_step': best_step,
-                'best_test_loss': best_test_loss
+                'best_test_loss': best_test_loss,
+                'best_test_acc': best_test_acc,
             }, f)
+
+    wandb.finish()
 
     if world_size > 1:
         dist.destroy_process_group()
