@@ -164,3 +164,4 @@ cython_debug/
 # my data and wandb logs
 /data/
 /wandb/
+/experiments/
