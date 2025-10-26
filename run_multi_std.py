@@ -15,7 +15,6 @@ import yaml
 import csv
 from pathlib import Path
 import argparse
-import numpy as np
 
 
 
@@ -48,7 +47,7 @@ def main():
     results = []
     
     for run in range(args.num_runs):
-        log_dir = base_dir / f"seed_{run}"
+        log_dir = base_dir / f"seed_{run + 1}"
         
         print(f"Run {run + 1}/{args.num_runs}")
         
