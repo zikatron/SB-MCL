@@ -58,7 +58,8 @@ def main():
             "-c", args.config,
             "-l", str(log_dir),
             "-rn", args.run_name,
-            "-s", str(run + 1)  # run number
+            "-s", str(run + 1),  # run number
+            "--no-backup",
         ]
         
         # Add online mode override if needed
