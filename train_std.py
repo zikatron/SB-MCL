@@ -273,13 +273,15 @@ def train(rank, world_size, port, args, config, wandb_logger):
         print(f'Training ended at {end_time}')
         print(f'Elapsed time: {end_time - start_time}')
         with open(path.join(config['log_dir'], 'completed.yaml'), 'a') as f:
-            yaml.dump({
-                'step': step,
-                'end_time': end_time,
-                'best_step': best_step,
-                'best_test_loss': best_test_loss,
-                'best_test_acc': best_test_acc,
-            }, f)
+                yaml.dump({
+                    'end_time': end_time,
+                    'elapsed_time': str(end_time - start_time),  # NEW
+                    'best_step': best_step,
+                    'best_test_loss': best_test_loss.item(),
+                    'best_test_acc': best_test_acc.item(),
+                    'final_test_loss': test_loss.item(),  # NEW
+                    'final_test_acc': test_acc.item(),  # NEW
+                }, f)
 
     wandb.finish()
 
