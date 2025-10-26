@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--config', '-c', required=True, help='Path to config file')
     parser.add_argument('--num-runs', '-n', type=int, default=3, help='Number of runs')
     parser.add_argument('--online', action='store_true', help='Use online learning mode')
+    parser.add_argument('--run-name', '-rn', default='i_didnt_set_a_name_lol', help='Name of the run')
     args = parser.parse_args()
     
     # Determine base directory based on mode
@@ -55,7 +56,9 @@ def main():
         cmd = [
             "uv", "run", "train_std.py",
             "-c", args.config,
-            "-l", str(log_dir)
+            "-l", str(log_dir),
+            "-rn", args.run_name,
+            "-s", str(run + 1)  # run number
         ]
         
         # Add online mode override if needed

@@ -30,6 +30,8 @@ parser.add_argument('--log-dir', '-l')
 parser.add_argument('--override', '-o', default='')
 parser.add_argument('--resume', action='store_true')
 parser.add_argument('--no-backup', action='store_true')
+parser.add_argument('--run-name', '-rn', default='i_didnt_set_a_name_lol')
+parser.add_argument("--run_number", "-s", default=0)
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -85,7 +87,7 @@ def main():
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
     print(f'Config saved to {config_save_path}')
-    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA_single_episode")
+    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA_{args.run_name}_seed{args.run_number}")
 
 
     # Save code
