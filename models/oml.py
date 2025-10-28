@@ -87,6 +87,8 @@ class OML(Model, MamlModule):
             output.add_classification_summary(logit, test_y, meta_split)
         elif self.config['output_type'] == 'image':
             output.add_image_comparison_summary(test_x, test_y, test_x, logit, key=f'completion/meta_{meta_split}')
+        if meta_split == 'test':
+            output['predictions'] = logit.argmax(dim=-1)
         return output
 
     def forward_train(self, train_x, train_y, inner_lr, is_meta_training):

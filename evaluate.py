@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 from datetime import datetime
 from glob import glob
 from itertools import product
+import csv
 
 import torch
 import yaml
@@ -23,6 +24,37 @@ parser.add_argument('--shots', '-s', default='5,10,20,50,100,200')
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+
+
+def compute_interval_accuracies(predictions, labels, num_intervals):
+    """
+    Compute accuracy for each interval.
+    
+    Args:
+        predictions: [batch, test_num] predicted class labels
+        labels: [batch, test_num] ground truth labels
+        num_intervals: number of intervals to split into
+        
+    Returns:
+        interval_accs: [batch, num_intervals] accuracy per interval per episode
+    """
+    batch_size, test_num = labels.shape[:2]
+    interval_size = test_num // num_intervals
+    
+    # Compute per-interval accuracy
+    interval_accs = []
+    for i in range(num_intervals):
+        start = i * interval_size
+        end = (i + 1) * interval_size
+        
+        interval_preds = predictions[:, start:end]
+        interval_labels = labels[:, start:end]
+        interval_correct = (interval_preds == interval_labels).float()
+        interval_acc = interval_correct.mean(dim=1)  # [batch]
+        interval_accs.append(interval_acc)
+    
+    interval_accs = torch.stack(interval_accs, dim=1)  # [batch, num_intervals]
+    return interval_accs
 
 
 def main():
@@ -88,6 +120,8 @@ def evaluate(rank, config, eval_settings):
     for (tasks, shots), meta_split in product(eval_settings, meta_splits):
         print(f'Evaluation with {tasks}-task {shots}-shot meta-{meta_split} set')
         result_path = path.join(config['log_dir'], f'evaluation-{tasks}t{shots}s-meta_{meta_split}.pt')
+        csv_path = path.join(config['log_dir'], f'evaluation-{tasks}t{shots}s-intervals.csv')
+        
         if path.exists(result_path):
             print(f'Already evaluated in {result_path}')
             continue
@@ -118,17 +152,72 @@ def evaluate(rank, config, eval_settings):
             datasets[meta_split], batch_size=eval_batch_size, collate_fn=datasets[meta_split].collate_fn)
         data_loader_iter = iter(data_loader)
 
+        # Calculate interval parameters
+        num_intervals = 10
+        interval_size = config['tasks'] // num_intervals
+        
+        # Store per-episode metrics
+        episode_metrics = []
+
         with torch.no_grad(), Timer('Evaluation time: {:.3f}s'):
             output = Output()
             print('-' * eval_iter + f' batch_size={eval_batch_size}')
-            for _ in range(eval_iter):
+            for iter_idx in range(eval_iter):
                 train_x, train_y, test_x, test_y = next(data_loader_iter)
                 train_x, train_y, test_x, test_y = prepare_data(train_x, train_y, test_x, test_y, rank=rank)
 
-                output.extend(model(train_x, train_y, test_x, test_y, summarize=True, meta_split='test'))  # always test
+                batch_output = model(train_x, train_y, test_x, test_y, summarize=True, meta_split='test')
+                
+                # Extract predictions and compute interval accuracies
+                if 'predictions' in batch_output:
+                    predictions = batch_output['predictions']  # [batch, test_num]
+                    batch_size = predictions.shape[0]
+                    
+                    # Compute interval accuracies for this batch
+                    interval_accs = compute_interval_accuracies(predictions, test_y, num_intervals)
+                    
+                    # Store per-episode metrics
+                    for ep_idx in range(batch_size):
+                        episode_num = iter_idx * eval_batch_size + ep_idx
+                        
+                        # Overall accuracy for this episode
+                        ep_correct = (predictions[ep_idx] == test_y[ep_idx]).float()
+                        overall_acc = ep_correct.mean().item()
+                        
+                        # Interval accuracies
+                        ep_interval_accs = interval_accs[ep_idx].cpu().numpy().tolist()
+                        
+                        episode_metrics.append({
+                            'episode': episode_num,
+                            'overall_acc': overall_acc,
+                            'intervals': ep_interval_accs
+                        })
+                
+                output.extend(batch_output)
                 print('.', end='', flush=True)
             torch.save(output.export(), result_path)
             print()
+        
+        # Write CSV
+        if episode_metrics:  # Only write if we have metrics
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                
+                # Header
+                header = ['episode', 'overall_accuracy']
+                for i in range(num_intervals):
+                    start = i * interval_size
+                    end = (i + 1) * interval_size - 1
+                    header.append(f'interval_{start}-{end}')
+                writer.writerow(header)
+                
+                # Data rows
+                for metrics in episode_metrics:
+                    row = [metrics['episode'], metrics['overall_acc']]
+                    row.extend(metrics['intervals'])
+                    writer.writerow(row)
+            
+            print(f'Interval metrics saved to {csv_path}')
 
     end_time = datetime.now()
     print()

@@ -62,6 +62,8 @@ class GeMCL(Model):
 
         output = Output()
         output[f'loss/meta_{meta_split}'] = loss
+        if meta_split == 'test':
+            output['predictions'] = logit.argmax(dim=-1)
         if not summarize:
             return output
 
