@@ -135,6 +135,7 @@ def evaluate(rank, config, eval_settings):
         config['tasks'] = tasks
         config['train_shots'] = shots
         config['test_shots'] = min(max((1000 // tasks), 1), 10 if 'omniglot' in config['dataset'] or 'celeb' in config['dataset'] else 50)
+        print(f'Using test_shots={config["test_shots"]}')
         config['train_chunk'] = 1000
         total_episodes = 512
         max_train_len = 10_000
@@ -144,6 +145,8 @@ def evaluate(rank, config, eval_settings):
         ex_per_epi = config['tasks'] * (config['train_shots'] + config['test_shots'])
         max_ex_per_batch = 15_000 if 'max_ex_per_batch' not in config else config['max_ex_per_batch']
         eval_batch_size = min(max_ex_per_batch // ex_per_epi, total_episodes)
+        print(f'Eval batch size: {eval_batch_size}, eval iterations: {eval_iter}')
+        print()
         if eval_batch_size == 0:
             raise RuntimeError(f'Too large episode size: {tasks}t{shots}s')
         eval_batch_size = 2 ** int(eval_batch_size.bit_length() - 1)  # round down to power of 2
