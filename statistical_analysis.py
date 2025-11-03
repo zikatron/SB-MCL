@@ -15,4 +15,4 @@ def calculate_mean(file_path: str, column_name: str) -> float:
     mean_value = data[column_name].mean()
     return mean_value
 
-# calculate_mean('data.csv', 'value')
+print(calculate_mean('/home/bytefuse/batsi/SB-MCL/experiments/STD-offline/results.csv', 'best_test_acc'))

@@ -19,8 +19,8 @@ parser = ArgumentParser()
 parser.add_argument('--config', '-c')
 parser.add_argument('--log-dir', '-l')
 parser.add_argument('--override', '-o', default='')
-parser.add_argument('--tasks', '-t', default='5,10,20,50,100,200,500')
-parser.add_argument('--shots', '-s', default='5,10,20,50,100,200')
+parser.add_argument('--tasks', '-t', default='2')
+parser.add_argument('--shots', '-s', default='10')
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -145,12 +145,12 @@ def evaluate(rank, config, eval_settings):
         ex_per_epi = config['tasks'] * (config['train_shots'] + config['test_shots'])
         max_ex_per_batch = 15_000 if 'max_ex_per_batch' not in config else config['max_ex_per_batch']
         eval_batch_size = min(max_ex_per_batch // ex_per_epi, total_episodes)
-        print(f'Eval batch size: {eval_batch_size}, eval iterations: {eval_iter}')
         print()
         if eval_batch_size == 0:
             raise RuntimeError(f'Too large episode size: {tasks}t{shots}s')
         eval_batch_size = 2 ** int(eval_batch_size.bit_length() - 1)  # round down to power of 2
         eval_iter = total_episodes // eval_batch_size
+        print(f'Eval batch size: {eval_batch_size}, eval iterations: {eval_iter}')
         data_loader = DataLoader(
             datasets[meta_split], batch_size=eval_batch_size, collate_fn=datasets[meta_split].collate_fn)
         data_loader_iter = iter(data_loader)
@@ -175,6 +175,12 @@ def evaluate(rank, config, eval_settings):
                 if 'predictions' in batch_output:
                     predictions = batch_output['predictions']  # [batch, test_num]
                     batch_size = predictions.shape[0]
+
+                    # DEBUG: Print shapes
+                    # print(f"\nDEBUG - predictions shape: {predictions.shape}")
+                    # print(f"DEBUG - test_y shape: {test_y.shape}")
+                    # print(f"DEBUG - predictions sample: {predictions[0, :5]}")
+                    # print(f"DEBUG - test_y sample: {test_y[0, :5] if len(test_y.shape) == 2 else test_y[0, 0, :5]}")
                     
                     # Compute interval accuracies for this batch
                     interval_accs = compute_interval_accuracies(predictions, test_y, num_intervals)
@@ -195,6 +201,8 @@ def evaluate(rank, config, eval_settings):
                             'overall_acc': overall_acc,
                             'intervals': ep_interval_accs
                         })
+                    del batch_output['predictions']
+
                 
                 output.extend(batch_output)
                 print('.', end='', flush=True)

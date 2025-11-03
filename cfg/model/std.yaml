@@ -5,12 +5,12 @@ model: Std
 # Training
 batch_size: 16
 eval_batch_size: 32
-max_train_steps: 10000
+max_train_steps: 50000
 
 lr_sched: StepLR
 lr_sched_args:
-  step_size: 2000
-  gamma: 0.5
+  step_size: 10000
+  gamma: 1
 
 summary_interval: 50
-eval_interval: 100
+eval_interval: 625

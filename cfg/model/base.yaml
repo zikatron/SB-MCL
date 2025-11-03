@@ -15,11 +15,11 @@ num_bites: 1
 
 optim: Adam
 optim_args:
-  lr: 0.0001
+  lr: 0.001
 lr_sched: StepLR
 lr_sched_args:
   step_size: 10000
-  gamma: 0.5
+  gamma: 1
 
 summary_interval: 250
 eval_interval: 1000

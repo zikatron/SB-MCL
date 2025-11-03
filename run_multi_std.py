@@ -21,7 +21,7 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description='Run multiple standard training experiments')
     parser.add_argument('--config', '-c', required=True, help='Path to config file')
-    parser.add_argument('--num-runs', '-n', type=int, default=3, help='Number of runs')
+    parser.add_argument('--num-runs', '-n', type=int, default=2, help='Number of runs')
     parser.add_argument('--online', action='store_true', help='Use online learning mode')
     parser.add_argument('--run-name', '-rn', default='i_didnt_set_a_name_lol', help='Name of the run')
     args = parser.parse_args()

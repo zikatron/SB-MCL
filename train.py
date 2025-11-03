@@ -32,6 +32,7 @@ parser.add_argument('--log-dir', '-l')
 parser.add_argument('--override', '-o', default='') # NEW: allows you to override config options via command line without editing the config file.
 parser.add_argument('--resume', action='store_true') # NEW: continue from where you left off if a checkpoint exists.
 parser.add_argument('--no-backup', action='store_true') # NEW: do not backup code to log directory.
+parser.add_argument('--run-name', '-rn', default='') # NEW: specify a custom run name for logging.
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -72,7 +73,7 @@ def get_config(config_path):
 
 
 def main():
-    os.environ['WANDB_API_KEY'] = # add your key here.
+    os.environ['WANDB_API_KEY'] =
 
     if torch.cuda.is_available():
         print(f'Running on {socket.gethostname()} | {torch.cuda.device_count()}x {torch.cuda.get_device_name()}')
@@ -122,7 +123,7 @@ def main():
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
     print(f'Config saved to {config_save_path}')
-    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA")
+    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA_{args.run_name}")
 
     # Save code
     if not args.no_backup:
@@ -340,6 +341,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
 
                 if summarize:
                     output = output.gather(world_size)
+                    del output['predictions']
 
                     if rank == 0:
                         output.summarize(writer, step)

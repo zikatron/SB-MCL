@@ -153,6 +153,8 @@ class MetaCasia(IterableDataset):
             random.shuffle(classes)
             type(self).meta_train_classes = classes[config['meta_test_tasks']:]
             type(self).meta_test_classes = classes[:config['meta_test_tasks']]
+            print(f'Meta-train classes: {len(self.meta_train_classes)}')
+            print(f'Meta-test classes: {len(self.meta_test_classes)}')
             random.seed()  # Reset seed
 
         if self.meta_split == 'train':

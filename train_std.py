@@ -38,7 +38,7 @@ torch.backends.cudnn.allow_tf32 = True
 
 
 def main():
-    os.environ['WANDB_API_KEY'] = # add your key here
+    os.environ['WANDB_API_KEY'] =
 
     if torch.cuda.is_available():
         print(f'Running on {socket.gethostname()} | {torch.cuda.device_count()}x {torch.cuda.get_device_name()}')
@@ -177,9 +177,11 @@ def train(rank, world_size, port, args, config, wandb_logger):
         config['max_train_steps'] = len(train_loader)
     else:
         train_loader = DataLoader(
-            train_set, batch_size=config['batch_size'],
-            sampler=torch.utils.data.RandomSampler(
-                train_set, replacement=True, num_samples=config['batch_size'] * config['max_train_steps']))
+            train_set, batch_size=config['batch_size'], shuffle=True)
+        # train_loader = DataLoader(
+        #     train_set, batch_size=config['batch_size'],
+        #     sampler=torch.utils.data.RandomSampler(
+        #         train_set, replacement=True, num_samples=config['batch_size'] * config['max_train_steps']))
     # 
     test_loader = DataLoader(test_set, batch_size=config['eval_batch_size'], shuffle=False)
 
@@ -192,69 +194,79 @@ def train(rank, world_size, port, args, config, wandb_logger):
     test_acc = 0
     train_acc = 0
 
-    for step, (train_x, train_y) in enumerate(train_loader, start=1):
-        train_x, train_y = prepare_data(train_x, train_y, rank=rank)
+    step = 0
+    num_epochs = 160 // world_size
+    
+    #every epoch should have 625 steps with a thousand tasks and 10 shots
 
-        summarize = step % config['summary_interval'] == 0
-        output = model(train_x, train_y, summarize=summarize, split='train')
-        assert output['loss/train'].shape == train_x.shape[:1], 'Loss shape must be (batch_size,)'
-        output['loss/train'].mean().backward()
-        output['loss/train'] = output['loss/train'].detach()
+    for _ in range(num_epochs):
+        train_loader = DataLoader(
+            train_set, batch_size=config['batch_size'], shuffle=True)
+        
+        for train_x, train_y in train_loader:
+            train_x, train_y = prepare_data(train_x, train_y, rank=rank)
+            step += 1
 
-        optim.step()
-        optim.zero_grad()
-        lr_sched.step()
+            summarize = step % config['summary_interval'] == 0
+            output = model(train_x, train_y, summarize=summarize, split='train')
+            assert output['loss/train'].shape == train_x.shape[:1], 'Loss shape must be (batch_size,)'
+            output['loss/train'].mean().backward()
+            output['loss/train'] = output['loss/train'].detach()
 
-        if summarize and rank == 0:
-            writer.add_scalar('lr', lr_sched.get_last_lr()[0], step)
-            output.summarize(writer, step)
+            optim.step()
+            optim.zero_grad()
+            lr_sched.step()
 
-            # Compute remaining time
-            now = datetime.now()
-            elapsed_time = now - start_time
-            elapsed_steps = step - start_step
-            total_steps = config['max_train_steps'] - start_step
-            est_total = elapsed_time * total_steps / elapsed_steps
-            # Remove microseconds for brevity
-            elapsed_time = str(elapsed_time).split('.')[0]
-            est_total = str(est_total).split('.')[0]
-            train_loss = output['loss/train'].mean()
-            print(f'\r[Step {step}] [{elapsed_time} / {est_total}] Train loss: {train_loss:.6f}', end='')
-            if 'acc/train' in output:
-                train_acc = output['acc/train'].mean()
-            wandb_logger.log({
-            "train_accuracy": train_acc,
-            "train_loss": train_loss,
-            "test_accuracy": test_acc,
-            "test_loss": test_loss,
-        }, step=step)
-
-            if torch.isnan(train_loss).any().item():
-                raise RuntimeError('NaN loss encountered')
-
-        if step % config['eval_interval'] == 0 or step == len(train_loader):
-            # Test
-            print()
-            model.eval()
-            with torch.no_grad(), Timer('Test time: {:.3f}s'):
-                output = Output()
-                for test_x, test_y in test_loader:
-                    test_x, test_y = prepare_data(test_x, test_y, rank=rank)
-                    output = model(test_x, test_y, summarize=True, split='test')
-                    output.extend(output)
-                output = output.gather(world_size)
-
-            if rank == 0:
+            if summarize and rank == 0:
+                writer.add_scalar('lr', lr_sched.get_last_lr()[0], step)
                 output.summarize(writer, step)
-                test_loss = output['loss/test'].mean()
-                if 'acc/test' in output:
-                    test_acc = output['acc/test'].mean()
-                print(f'[Step {step}] Test loss: {test_loss:.6f}')
-                if test_loss < best_test_loss:
-                    best_test_loss = test_loss
-                    best_step = step
-                    best_test_acc = test_acc
-            model.train()
+
+                # Compute remaining time
+                now = datetime.now()
+                elapsed_time = now - start_time
+                elapsed_steps = step - start_step
+                total_steps = config['max_train_steps'] - start_step
+                est_total = elapsed_time * total_steps / elapsed_steps
+                # Remove microseconds for brevity
+                elapsed_time = str(elapsed_time).split('.')[0]
+                est_total = str(est_total).split('.')[0]
+                train_loss = output['loss/train'].mean()
+                print(f'\r[Step {step}] [{elapsed_time} / {est_total}] Train loss: {train_loss:.6f}', end='')
+                if 'acc/train' in output:
+                    train_acc = output['acc/train'].mean()
+                wandb_logger.log({
+                "train_accuracy": train_acc,
+                "train_loss": train_loss,
+                "test_accuracy": test_acc,
+                "test_loss": test_loss,
+            }, step=step)
+
+                if torch.isnan(train_loss).any().item():
+                    raise RuntimeError('NaN loss encountered')
+
+            if step % config['eval_interval'] == 0:
+                # Test
+                print()
+                model.eval()
+                with torch.no_grad(), Timer('Test time: {:.3f}s'):
+                    output = Output()
+                    for test_x, test_y in test_loader:
+                        test_x, test_y = prepare_data(test_x, test_y, rank=rank)
+                        output = model(test_x, test_y, summarize=True, split='test')
+                        output.extend(output)
+                    output = output.gather(world_size)
+
+                if rank == 0:
+                    output.summarize(writer, step)
+                    test_loss = output['loss/test'].mean()
+                    if 'acc/test' in output:
+                        test_acc = output['acc/test'].mean()
+                    print(f'[Step {step}] Test loss: {test_loss:.6f}')
+                    if test_loss < best_test_loss:
+                        best_test_loss = test_loss
+                        best_step = step
+                        best_test_acc = test_acc
+                model.train()
 
     if rank == 0:
         # Save checkpoint

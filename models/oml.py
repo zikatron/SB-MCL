@@ -103,6 +103,8 @@ class OML(Model, MamlModule):
                 mlp_out = self.maml_mlp(x_i)
                 logit = self.decoder(mlp_out)
                 loss = reduce(self.loss_fn(logit, y_i), 'b ... -> b', 'mean').sum()
+                # self.inner_update(loss, inner_lr, is_meta_training=is_meta_training)
+
                 if is_meta_training:
                     # Meta-training: update all layers
                     self.inner_update(loss, inner_lr, is_meta_training=is_meta_training)
