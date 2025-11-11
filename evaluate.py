@@ -19,7 +19,7 @@ parser = ArgumentParser()
 parser.add_argument('--config', '-c')
 parser.add_argument('--log-dir', '-l')
 parser.add_argument('--override', '-o', default='')
-parser.add_argument('--tasks', '-t', default='2')
+parser.add_argument('--tasks', '-t', default='1000')
 parser.add_argument('--shots', '-s', default='10')
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -101,8 +101,17 @@ def evaluate(rank, config, eval_settings):
     ckpt_step = int(path.basename(ckpt_path).split('-')[1].split('.')[0])
     if ckpt_step != config['max_train_steps']:
         raise RuntimeError(f'Latest checkpoint {ckpt_path} does not match max_train_steps {config["max_train_steps"]}')
+    # NEW:
     ckpt = torch.load(ckpt_path)
-    model.load_state_dict(ckpt['model'], strict=False)
+    state_dict = ckpt['model']
+
+    # Check if checkpoint has DDP prefix (from multi-GPU training)
+    if any(k.startswith('module.') for k in state_dict.keys()):
+        print("Detected DDP checkpoint, removing 'module.' prefix...")
+        state_dict = {k.replace('module.', '', 1): v for k, v in state_dict.items()}
+
+    # Load with strict=True to catch any remaining issues
+    model.load_state_dict(state_dict)
     print(f'Checkpoint loaded from {ckpt_path}')
     model.eval()
 
@@ -125,25 +134,25 @@ def evaluate(rank, config, eval_settings):
         if path.exists(result_path):
             print(f'Already evaluated in {result_path}')
             continue
-        if config['dataset'] in ['omniglot', 'celeb']:
-            if tasks > 500:
-                print(f'Skip {tasks}t{shots}s because it exceeds 500 tasks')
-                continue
-            if shots > 10:
-                print(f'Skip {tasks}t{shots}s because it exceeds 10 shots')
-                continue
+        # if config['dataset'] in ['omniglot', 'celeb']:
+        #     if tasks > 500:
+        #         print(f'Skip {tasks}t{shots}s because it exceeds 500 tasks')
+        #         continue
+        #     if shots > 10:
+        #         print(f'Skip {tasks}t{shots}s because it exceeds 10 shots')
+        #         continue
         config['tasks'] = tasks
         config['train_shots'] = shots
         config['test_shots'] = min(max((1000 // tasks), 1), 10 if 'omniglot' in config['dataset'] or 'celeb' in config['dataset'] else 50)
         print(f'Using test_shots={config["test_shots"]}')
         config['train_chunk'] = 1000
         total_episodes = 512
-        max_train_len = 10_000
+        max_train_len = 20_000
         if config['tasks'] * config['train_shots'] > max_train_len:
             print(f'Skip {tasks}t{shots}s because it exceeds max_ex_per_epi={max_train_len}')
             continue
         ex_per_epi = config['tasks'] * (config['train_shots'] + config['test_shots'])
-        max_ex_per_batch = 15_000 if 'max_ex_per_batch' not in config else config['max_ex_per_batch']
+        max_ex_per_batch = 20_000 if 'max_ex_per_batch' not in config else config['max_ex_per_batch']
         eval_batch_size = min(max_ex_per_batch // ex_per_epi, total_episodes)
         print()
         if eval_batch_size == 0:
