@@ -160,7 +160,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
 
     # Data
     Dataset = DATASET[config['dataset']]
-    meta_test_set = Dataset(config, root='./data', meta_split='test')
+    meta_test_set = Dataset(config, root='./data', meta_split='test', seed_classes=args.run_number, model=config['model'])
     meta_test_loader = DataLoader(
         meta_test_set,
         batch_size=config['eval_batch_size'],
@@ -195,9 +195,10 @@ def train(rank, world_size, port, args, config, wandb_logger):
     train_acc = 0
 
     step = 0
-    num_epochs = 160 // world_size
+    num_epochs = 100 // world_size
     
-    #every epoch should have 625 steps with a 100 tasks and 10 shots
+    #every epoch should have 625 steps with a 1000 tasks and 10 shots
+    # size of data (shots * tasks) / batch size = steps per epoch
 
     for _ in range(num_epochs):
         train_loader = DataLoader(
@@ -267,7 +268,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
                         best_step = step
                         best_test_acc = test_acc
                         # Save checkpoint
-                        new_ckpt_path = path.join(config['log_dir'], f'ckpt-{step:06}.pt')
+                        new_ckpt_path = path.join(config['log_dir'], 'ckpt-best_model.pt')
                         torch.save({
                             'step': step,
                             'config': config,
