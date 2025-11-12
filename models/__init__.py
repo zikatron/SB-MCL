@@ -27,4 +27,5 @@ MODEL = {
     'StdDDPM': StdDDPM,
     'SbmclDDPM': SbmclDDPM,
     'ContinualTransformer': ContinualTransformer,
+    'REMIND': Std,  # REMIND uses the same architecture as Std
 }
