@@ -20,15 +20,17 @@ import argparse
 
 def main():
     parser = argparse.ArgumentParser(description='Run multiple standard training experiments')
+    parser.add_argument('--model', '-m',required=True, help='Model name')
     parser.add_argument('--config', '-c', required=True, help='Path to config file')
     parser.add_argument('--num-runs', '-n', type=int, default=2, help='Number of runs')
     parser.add_argument('--online', action='store_true', help='Use online learning mode')
     parser.add_argument('--run-name', '-rn', default='i_didnt_set_a_name_lol', help='Name of the run')
+    parser.add_argument('--script-path', '-sp',default='train_std.py', help='Path to the training script')
     args = parser.parse_args()
     
     # Determine base directory based on mode
     mode = 'online' if args.online else 'offline'
-    base_dir = Path('experiments') / f'STD-{mode}'
+    base_dir = Path('experiments') / f'{args.model}-{mode}'
     base_dir.mkdir(parents=True, exist_ok=True)
     
     csv_path = base_dir / 'results.csv'
@@ -54,7 +56,7 @@ def main():
         
         # Build command
         cmd = [
-            "uv", "run", "train_std.py",
+            "uv", "run", args.script_path,
             "-c", args.config,
             "-l", str(log_dir),
             "-rn", args.run_name,
