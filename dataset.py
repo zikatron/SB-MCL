@@ -27,6 +27,44 @@ from utils import Timer
 def get_y(tasks, shots):
     return repeat(torch.arange(tasks), 't -> (t s)', s=shots)
 
+def get_samples(dataset, classes):
+    # Sample examples for each class
+    train_x = []
+    test_x = []
+    for cls in classes:
+        cls_imgs = dataset.x_dict[cls]
+        cls_cache = dataset.cache[cls]
+        random.seed(dataset.seed_classes)  # Reset seed
+        sampled_indices = random.sample(
+            range(len(cls_imgs)), dataset.config['train_shots'] + dataset.config['test_shots'])
+
+        # Load sampled images
+        imgs = []
+        for idx in sampled_indices:
+            if idx not in cls_cache:
+                img_bytes = cls_imgs[idx]
+                img = Image.open(BytesIO(img_bytes))
+                img = pil_to_tensor(img)
+                cls_cache[idx] = img
+                cls_imgs[idx] = None
+            imgs.append(cls_cache[idx])
+
+        train_imgs = imgs[:dataset.config['train_shots']]
+        test_imgs = imgs[dataset.config['train_shots']:]
+        train_x.extend(train_imgs)
+        test_x.extend(test_imgs)
+
+    train_x = torch.stack(train_x)
+    test_x = torch.stack(test_x)
+    if dataset.model == 'REMIND':
+        train_y = get_y(160, dataset.config['train_shots'])
+        test_y = get_y(160, dataset.config['test_shots'])
+    else:
+        train_y = get_y(dataset.config['tasks'], dataset.config['train_shots'])
+        test_y = get_y(dataset.config['tasks'], dataset.config['test_shots'])
+    random.seed()  # Reset seed
+    return train_x, train_y, test_x, test_y
+
 class MetaOmniglot(IterableDataset):
     """Omniglot dataset with CASIA-style fixed splits and no augmentations"""
     x_dict = None
@@ -238,7 +276,7 @@ class MetaCasia(IterableDataset):
     x_dict = None
     y_dict = None
 
-    def __init__(self, config, root='./data', meta_split='train'):
+    def __init__(self, config, root='./data', meta_split='train', seed_classes=None, model=None):
         super().__init__()
         self.config = config
         self.root = root
@@ -246,7 +284,8 @@ class MetaCasia(IterableDataset):
         self.meta_split = meta_split
         self.pickle_path = path.join(self.data_dir, f'{self.name}.pickle')
         self.collate_fn = None
-
+        self.seed_classes = seed_classes
+        self.model = model
         if not path.exists(self.pickle_path):
             self.download()
             self.build_pickle()
@@ -279,39 +318,15 @@ class MetaCasia(IterableDataset):
 
     def __next__(self):
         # Sample a sequence of classes
+        if self.seed_classes is not None:
+            random.seed(self.seed_classes)  # Ensure same classes. This is mainly for the REMIND experiments
         classes = random.sample(self.classes, self.config['tasks'])
+        random.seed()  # Reset seed
 
-        # Sample examples for each class
-        train_x = []
-        test_x = []
-        for cls in classes:
-            cls_imgs = self.x_dict[cls]
-            cls_cache = self.cache[cls]
-            sampled_indices = random.sample(
-                range(len(cls_imgs)), self.config['train_shots'] + self.config['test_shots'])
-
-            # Load sampled images
-            imgs = []
-            for idx in sampled_indices:
-                if idx not in cls_cache:
-                    img_bytes = cls_imgs[idx]
-                    img = Image.open(BytesIO(img_bytes))
-                    img = pil_to_tensor(img)
-                    cls_cache[idx] = img
-                    cls_imgs[idx] = None
-                imgs.append(cls_cache[idx])
-
-            train_imgs = imgs[:self.config['train_shots']]
-            test_imgs = imgs[self.config['train_shots']:]
-            train_x.extend(train_imgs)
-            test_x.extend(test_imgs)
-
-        train_x = torch.stack(train_x)
-        test_x = torch.stack(test_x)
-        train_y = get_y(self.config['tasks'], self.config['train_shots'])
-        test_y = get_y(self.config['tasks'], self.config['test_shots'])
-
-        return train_x, train_y, test_x, test_y
+        if self.model == 'REMIND':
+            return get_samples(self, classes[:160])
+        else:
+            return get_samples(self, classes)
 
     def download(self):
         download_links = [
