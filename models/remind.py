@@ -44,22 +44,38 @@ class REMIND(nn.Module):
         outputs=[]
         x = rearrange(x, 'b ... -> b 1 ...')
         y = rearrange(y, 'b ... -> b 1 ...')
+
         if split == 'train':
             for sample_x, sample_y in zip(x, y):
-                # Encode the sample
-                sample_encoded = self.encoder(sample_x)
+                sample_encoded = self.encoder(sample_x)  # GPU torch
                 sample_encoded = rearrange(sample_encoded, '1 num_channels h w -> h w num_channels')
-                # Compress using PQ
-                sample_encoded = self.pq.compute_codes(rearrange(sample_encoded, 'h w num_channels -> (h w) num_channels'))
-                sample_encoded = rearrange(sample_encoded, '(h w) num_codebooks -> h w num_codebooks', h=2, w=2)
-                # sample 15 images from the replay buffer
-                batch_codes, batch_labels = self.sample_replay_batch(sample_encoded, sample_y[0])
+                
+                # NEED: Convert to CPU numpy for PQ
+                sample_encoded_np = sample_encoded.cpu().numpy()
+                sample_encoded_np = rearrange(sample_encoded_np, 'h w num_channels -> (h w) num_channels')
+                codes = self.pq.compute_codes(sample_encoded_np) 
+                codes = rearrange(codes, '(h w) num_codebooks -> h w num_codebooks', h=2, w=2)
+                
+                # codes is numpy, pass to sample_replay_batch
+                batch_codes, batch_labels = self.sample_replay_batch(codes, sample_y[0])
                 batch_labels = rearrange(batch_labels, 'b ... -> b 1 ...')
-                # reconstruct the batch
-                batch_reconstructed = self.pq.decode(rearrange(batch_codes, 'b h w num_codebooks -> (b h w) num_codebooks'))
-                batch_reconstructed = rearrange(batch_reconstructed, '(b h w) num_channels -> b num_channels h w', h=2, w=2, num_channels=self.config['num_channels'])
-                # perform SGD on the MLP only
+                
+                # batch_codes is numpy (from sample_replay_batch)
+                batch_reconstructed = self.pq.decode(
+                    rearrange(batch_codes, 'b h w num_codebooks -> (b h w) num_codebooks')
+                )  # Returns numpy
+                
+                # NEED: Convert to GPU torch for MLP
+                batch_reconstructed = torch.from_numpy(batch_reconstructed).cuda()
+                batch_reconstructed = rearrange(
+                    batch_reconstructed, 
+                    '(b h w) num_channels -> b num_channels h w', 
+                    h=2, w=2, num_channels=self.config['num_channels']
+                )
+                batch_labels = torch.from_numpy(batch_labels).cuda()
                 logits = self.mlp(batch_reconstructed)
+                logits = self.decoder(logits)
+
                 loss = reduce(self.loss_fn(logits, batch_labels), 'b ... -> b', 'mean')
 
                 # Backpropagate loss and update MLP parameters
@@ -68,7 +84,7 @@ class REMIND(nn.Module):
                 self.optim.step()
 
                 # Add to replay buffer
-                self.add_sample_to_replay_buffer(sample_encoded, sample_y[0])
+                self.add_sample_to_replay_buffer(codes, sample_y[0])
                 output = Output()
                 output[f'loss/{split}'] = loss
 
@@ -77,13 +93,21 @@ class REMIND(nn.Module):
                 output.add_classification_summary(logits, batch_labels, split)
                 outputs.append(output)
         else:
-            # if testing
-            x_enc = self.encoder(x)
+            x_enc = self.encoder(x)  # GPU torch
+            
+            # NEED: Convert to CPU numpy
+            x_enc = x_enc.cpu().numpy()
+            
             x_enc = rearrange(x_enc, 'b num_channels h w -> b h w num_channels')
             x_enc = rearrange(x_enc, 'b h w num_channels -> (b h w) num_channels')
             x_enc = self.pq.compute_codes(x_enc)
-            x_enc=self.pq.decode(x_enc)
-            x_enc = rearrange(x_enc, '(b h w) num_channels -> b num_channels h w', h=2, w=2, num_channels=self.config['num_channels'])
+            x_enc = self.pq.decode(x_enc)
+            
+            # NEED: Convert back to GPU torch
+            x_enc = torch.from_numpy(x_enc).cuda()
+            
+            x_enc = rearrange(x_enc, '(b h w) num_channels -> b num_channels h w', 
+                            h=2, w=2, num_channels=self.config['num_channels'])
             logits = self.mlp(x_enc)
             logits = self.decoder(logits)
             meta_loss = reduce(self.loss_fn(logits, y), 'b ... -> b', 'mean')
@@ -119,21 +143,18 @@ class REMIND(nn.Module):
         all_codes = []
         all_labels = []
         for label, codes in self.replay_buffer.items():
-            all_codes.extend(codes)
+            all_codes.extend(codes)  # All numpy arrays
             all_labels.extend([label] * len(codes))
         
-        # Uniformly sample indices
         sample_indices = random.sample(range(len(all_codes)), num_replay)
-        
-        # Get sampled codes and labels
         sampled_codes = [all_codes[i] for i in sample_indices]
         sampled_labels = [all_labels[i] for i in sample_indices]
         
-        # Add current sample at the beginning
-        batch_codes = torch.stack([current_code] + sampled_codes)
-        batch_labels = torch.tensor([current_label] + sampled_labels)
+        # Stack numpy arrays
+        batch_codes = np.stack([current_code] + sampled_codes)  #  Change to np.stack
+        batch_labels = np.array([current_label] + sampled_labels)  # Change to np.array
         
-        return batch_codes, batch_labels
+        return batch_codes, batch_labels  # Both numpy
     
     def add_sample_to_replay_buffer(self, sample_encoded, sample_y):
         # Source - https://stackoverflow.com/a
@@ -163,15 +184,19 @@ class REMIND(nn.Module):
         
 
     def train_pq(self, train_x_initial):
-
+        
         train_x_initial = rearrange(train_x_initial, 'b ... -> b 1 ...')
-        logit = self.encoder(train_x_initial)
+        logit = self.encoder(train_x_initial)  # GPU torch tensor
+        
+        # NEED: Convert to CPU numpy for PQ
+        logit = logit.cpu().numpy() 
+        
         logit = rearrange(logit, 'b num_channels h w -> b h w num_channels')
-        logit = rearrange(logit, 'b h w num_channels -> (b h w) num_channels') # flatten (images*2*2, num_channels)
-        self.pq.train(logit)
-        # ? Should I do this by batches or all at once? The original paper does it in batches.
-        self.codes = self.pq.compute_codes(logit)
-        self.codes = rearrange(self.codes, '(b h w) num_codebooks -> b h w num_codebooks', h=2, w=2)
+        logit = rearrange(logit, 'b h w num_channels -> (b h w) num_channels')
+        self.pq.train(logit)  # Now CPU numpy 
+        codes = self.pq.compute_codes(logit)  # Returns numpy
+        codes = rearrange(codes, '(b h w) num_codebooks -> b h w num_codebooks', h=2, w=2)
+        return codes  # numpy (good for storage)
 
     def initialise_buffer_with_initial_data(self, train_x_initial, train_y_initial):
         """
@@ -186,7 +211,7 @@ class REMIND(nn.Module):
             train_x_initial: Initial training images
             train_y_initial: Corresponding class labels
         """
-        self.train_pq(train_x_initial)
+        codes = self.train_pq(train_x_initial)
 
-        for label, code in zip(train_y_initial, self.codes):
+        for label, code in zip(train_y_initial, codes):
             self.replay_buffer.setdefault(int(label), []).append(code)
