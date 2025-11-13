@@ -33,21 +33,5 @@ parser.add_argument('--resume', action='store_true')
 parser.add_argument('--no-backup', action='store_true')
 parser.add_argument('--run-name', '-rn', default='i_didnt_set_a_name_lol')
 parser.add_argument("--run_number", "-s", default=0)
+args = parser.parse_args()
 
-def build_replay_buffer(config, ckpt_path, model):
-
-    ckpt = torch.load(ckpt_path)
-    state_dict = ckpt['model']
-
-    # Check if checkpoint has DDP prefix (from multi-GPU training)
-    if any(k.startswith('module.') for k in state_dict.keys()):
-        print("Detected DDP checkpoint, removing 'module.' prefix...")
-        state_dict = {k.replace('module.', '', 1): v for k, v in state_dict.items()}
-
-    # Load with strict=True to catch any remaining issues
-    model.load_state_dict(state_dict)
-    print(f'Checkpoint loaded from {ckpt_path}')
-    model.inialize_replay_buffer(train_x, train_y)
-
-    replay_buffer = None
-    return replay_buffer
