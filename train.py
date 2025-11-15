@@ -73,7 +73,7 @@ def get_config(config_path):
 
 
 def main():
-    os.environ['WANDB_API_KEY'] =
+    # os.environ['WANDB_API_KEY'] =
 
     if torch.cuda.is_available():
         print(f'Running on {socket.gethostname()} | {torch.cuda.device_count()}x {torch.cuda.get_device_name()}')

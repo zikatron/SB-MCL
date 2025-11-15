@@ -14,6 +14,3 @@ lr_sched_args:
 
 summary_interval: 50
 eval_interval: 100
-codebook_size: 256
-num_codebooks: 32
-num_channels: 256 # based off the CNN encoder output dimension. see cnn.py in encoders folder.

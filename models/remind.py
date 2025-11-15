@@ -16,14 +16,11 @@ class REMIND(nn.Module):
         self.replay_buffer = {}
         self.replay_buffer_size = config['replay_buffer_size']
         nbits = int(np.log2(config['codebook_size']))
-        self.pq = faiss.ProductQuantizer(config['num_channels'], config['num_codebooks'], nbits) # placeholder
+        self.pq = faiss.ProductQuantizer(512, config['num_codebooks'], nbits) # placeholder
         enc_args = config['enc_args']
         enc_args['input_shape'] = config['x_shape']
         self.encoder = COMPONENT[config['encoder']](config, enc_args)
 
-        # Freeze encoder parameters
-        for param in self.encoder.parameters():
-            param.requires_grad = False
 
         dec_args = config['dec_args']
         dec_args['output_shape'] = [config['tasks']] if config['output_type'] == 'class' else config['y_shape']
@@ -34,8 +31,20 @@ class REMIND(nn.Module):
         mlp_args['output_shape'] = self.decoder.input_shape
         self.mlp = Mlp(config, mlp_args)
 
+        # Freeze encoder parameters
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+        # # Freeze all layers in the MLP
+        # for param in self.mlp.parameters():
+        #     param.requires_grad = False
+
+        # # Unfreeze the last layer
+        # for param in self.mlp[-1].parameters():  # Assuming self.mlp is a Sequential model
+        #     param.requires_grad = True
+
         # Define optimizer for MLP only
-        self.optim = torch.optim.Adam(self.mlp.parameters(), **config['optim_args'])
+        self.optim = torch.optim.SGD(self.mlp.parameters(), **config['optim_args'])
 
         self.loss_fn = OUTPUT_TYPE_TO_LOSS_FN[config['output_type']]
 
@@ -44,39 +53,34 @@ class REMIND(nn.Module):
         outputs=[]
         x = rearrange(x, 'b ... -> b 1 ...')
         y = rearrange(y, 'b ... -> b 1 ...')
+        x = self.encoder(x)  # GPU torch tensor
 
         if split == 'train':
-            for sample_x, sample_y in zip(x, y):
-                sample_encoded = self.encoder(sample_x)  # GPU torch
-                sample_encoded = rearrange(sample_encoded, '1 num_channels h w -> h w num_channels')
-                
+            for sample_encoded, sample_y in zip(x, y):
                 # NEED: Convert to CPU numpy for PQ
                 sample_encoded_np = sample_encoded.cpu().numpy()
-                sample_encoded_np = rearrange(sample_encoded_np, 'h w num_channels -> (h w) num_channels')
                 codes = self.pq.compute_codes(sample_encoded_np) 
-                codes = rearrange(codes, '(h w) num_codebooks -> h w num_codebooks', h=2, w=2)
                 
                 # codes is numpy, pass to sample_replay_batch
-                batch_codes, batch_labels = self.sample_replay_batch(codes, sample_y[0])
+                batch_codes, batch_labels = self.sample_replay_batch(codes, sample_y[0].item())
                 batch_labels = rearrange(batch_labels, 'b ... -> b 1 ...')
                 
                 # batch_codes is numpy (from sample_replay_batch)
                 batch_reconstructed = self.pq.decode(
-                    rearrange(batch_codes, 'b h w num_codebooks -> (b h w) num_codebooks')
+                    rearrange(batch_codes, 'b 1 num_codebooks -> (b 1) num_codebooks')
                 )  # Returns numpy
                 
                 # NEED: Convert to GPU torch for MLP
                 batch_reconstructed = torch.from_numpy(batch_reconstructed).cuda()
                 batch_reconstructed = rearrange(
                     batch_reconstructed, 
-                    '(b h w) num_channels -> b num_channels h w', 
-                    h=2, w=2, num_channels=self.config['num_channels']
+                    '(b 1) num_channels -> b 1 num_channels'
                 )
                 batch_labels = torch.from_numpy(batch_labels).cuda()
                 logits = self.mlp(batch_reconstructed)
                 logits = self.decoder(logits)
 
-                loss = reduce(self.loss_fn(logits, batch_labels), 'b ... -> b', 'mean')
+                loss = reduce(self.loss_fn(logits, batch_labels), 'b ... -> ()', 'mean')
 
                 # Backpropagate loss and update MLP parameters
                 self.optim.zero_grad()
@@ -84,7 +88,7 @@ class REMIND(nn.Module):
                 self.optim.step()
 
                 # Add to replay buffer
-                self.add_sample_to_replay_buffer(codes, sample_y[0])
+                self.add_sample_to_replay_buffer(codes, sample_y[0].item())
                 output = Output()
                 output[f'loss/{split}'] = loss
 
@@ -92,33 +96,31 @@ class REMIND(nn.Module):
                     outputs.append(output)
                 output.add_classification_summary(logits, batch_labels, split)
                 outputs.append(output)
-        else:
-            x_enc = self.encoder(x)  # GPU torch
-            
+        else:          
             # NEED: Convert to CPU numpy
-            x_enc = x_enc.cpu().numpy()
+            x_enc = x.cpu().numpy()
             
-            x_enc = rearrange(x_enc, 'b num_channels h w -> b h w num_channels')
-            x_enc = rearrange(x_enc, 'b h w num_channels -> (b h w) num_channels')
+            x_enc = rearrange(x_enc, 'b 1 num_channels -> (b 1) num_channels')
             x_enc = self.pq.compute_codes(x_enc)
             x_enc = self.pq.decode(x_enc)
             
             # NEED: Convert back to GPU torch
             x_enc = torch.from_numpy(x_enc).cuda()
             
-            x_enc = rearrange(x_enc, '(b h w) num_channels -> b num_channels h w', 
-                            h=2, w=2, num_channels=self.config['num_channels'])
+            x_enc = rearrange(x_enc, '(b 1) num_channels -> b 1 num_channels')
             logits = self.mlp(x_enc)
             logits = self.decoder(logits)
-            meta_loss = reduce(self.loss_fn(logits, y), 'b ... -> b', 'mean')
+            loss = reduce(self.loss_fn(logits, y), 'b ... -> b', 'mean')
 
             output = Output()
-            output[f'loss/{split}'] = meta_loss
+            output[f'loss/{split}'] = loss
             if not summarize:
                 return output
 
             output.add_classification_summary(logits, y, split)
             outputs.append(output)
+        # current_size = sum(len(sample) for sample in self.replay_buffer.values())
+        # print("Current replay buffer size:", current_size)
         return outputs
         
         # if testing
@@ -177,26 +179,30 @@ class REMIND(nn.Module):
         self.replay_buffer[int(sample_y)].append(sample_encoded)
 
 
-    def reconstruct_from_replay_buffer(self, codes_x):
-        train_x_reconstructed = self.pq.decode(codes_x) # * The shape should be (batch_size, h, w, num_channels)
-        train_x_reconstructed = rearrange(train_x_reconstructed, 'b h w num_channels -> b num_channels h w')
-        return train_x_reconstructed
+    # def reconstruct_from_replay_buffer(self, codes_x):
+    #     train_x_reconstructed = self.pq.decode(codes_x) # * The shape should be (batch_size, h, w, num_channels)
+    #     train_x_reconstructed = rearrange(train_x_reconstructed, 'b h w num_channels -> b num_channels h w')
+    #     return train_x_reconstructed
         
 
     def train_pq(self, train_x_initial):
         
         train_x_initial = rearrange(train_x_initial, 'b ... -> b 1 ...')
         logit = self.encoder(train_x_initial)  # GPU torch tensor
-        
+        print("Encoder output shape:", logit.shape)
         # NEED: Convert to CPU numpy for PQ
         logit = logit.cpu().numpy() 
-        
-        logit = rearrange(logit, 'b num_channels h w -> b h w num_channels')
-        logit = rearrange(logit, 'b h w num_channels -> (b h w) num_channels')
+        # the shape is (b,1,512) there's a linear layer in the cnn encoder
+        logit = rearrange(logit, 'b 1 output_shape -> (b 1) output_shape', b=1600, output_shape=self.config['num_channels'])
         self.pq.train(logit)  # Now CPU numpy 
         codes = self.pq.compute_codes(logit)  # Returns numpy
-        codes = rearrange(codes, '(b h w) num_codebooks -> b h w num_codebooks', h=2, w=2)
-        return codes  # numpy (good for storage)
+        # print("Initial codes shape:", codes.shape)
+        # print("Codebook size:", self.pq.code_size)
+        # print("Num codebooks:", self.pq.M)
+        # print("Dimensionality:", self.pq.d)
+        # print("Bits per codebook:", self.pq.nbits)
+        codes = rearrange(codes, '(b 1) num_codebooks -> b 1 num_codebooks', b=1600)
+        return codes
 
     def initialise_buffer_with_initial_data(self, train_x_initial, train_y_initial):
         """
@@ -204,7 +210,7 @@ class REMIND(nn.Module):
         
         Trains the Product Quantiser on initial features and populates the buffer.
         Buffer structure: {label: [codes]} where each code is a PQ-compressed
-        feature map of shape (h, w, num_codebooks). Each label maintains a list
+        feature map. Each label maintains a list
         of all stored codes for that class.
         
         Args:
@@ -212,6 +218,5 @@ class REMIND(nn.Module):
             train_y_initial: Corresponding class labels
         """
         codes = self.train_pq(train_x_initial)
-
         for label, code in zip(train_y_initial, codes):
             self.replay_buffer.setdefault(int(label), []).append(code)

@@ -57,8 +57,9 @@ def get_samples(dataset, classes):
     train_x = torch.stack(train_x)
     test_x = torch.stack(test_x)
     if dataset.model == 'REMIND':
-        train_y = get_y(160, dataset.config['train_shots'])
-        test_y = get_y(160, dataset.config['test_shots'])
+        num_classes = len(classes)
+        train_y = get_y(num_classes, dataset.config['train_shots'])
+        test_y = get_y(num_classes, dataset.config['test_shots'])
     else:
         train_y = get_y(dataset.config['tasks'], dataset.config['train_shots'])
         test_y = get_y(dataset.config['tasks'], dataset.config['test_shots'])
@@ -324,7 +325,7 @@ class MetaCasia(IterableDataset):
         random.seed()  # Reset seed
 
         if self.model == 'REMIND':
-            return get_samples(self, classes[:160])
+            return get_samples(self, classes[:160]), get_samples(self, classes[160:])
         else:
             return get_samples(self, classes)
 
