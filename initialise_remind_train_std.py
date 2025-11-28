@@ -87,7 +87,7 @@ def main():
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
     print(f'Config saved to {config_save_path}')
-    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA_{args.run_name}_seed{args.run_number}")
+    wandb_logger = init_wandb(config, name=f"{config['model']}_{config['dataset']}_{args.run_name}_seed{args.run_number}")
 
 
     # Save code
@@ -112,7 +112,7 @@ def main():
     sock.close()
 
     # Start DDP
-    world_size = torch.cuda.device_count()
+    world_size = 1#torch.cuda.device_count()
     if world_size > 1:
         assert config['batch_size'] % world_size == 0, 'Batch size must be divisible by the number of GPUs.'
         config['batch_size'] //= world_size
@@ -163,7 +163,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
     meta_test_set = Dataset(config, root='./data', meta_split='test', seed_classes=args.run_number, model=config['model'])
     meta_test_loader = DataLoader(
         meta_test_set,
-        batch_size=config['eval_batch_size'],
+        batch_size=1,
         num_workers=config['num_workers'],
         collate_fn=meta_test_set.collate_fn)
     train_x, train_y, test_x, test_y = next(iter(meta_test_loader))
@@ -195,7 +195,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
     train_acc = 0
 
     step = 0
-    num_epochs = 100 // world_size
+    num_epochs = 80 // world_size
     
     #every epoch should have 625 steps with a 1000 tasks and 10 shots
     # size of data (shots * tasks) / batch size = steps per epoch

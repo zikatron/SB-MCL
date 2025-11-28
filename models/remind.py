@@ -35,6 +35,8 @@ class REMIND(nn.Module):
         for param in self.encoder.parameters():
             param.requires_grad = False
 
+        self.encoder.eval()  # Set encoder to eval mode
+
         # # Freeze all layers in the MLP
         # for param in self.mlp.parameters():
         #     param.requires_grad = False
@@ -45,6 +47,7 @@ class REMIND(nn.Module):
 
         # Define optimizer for MLP only
         self.optim = torch.optim.SGD(self.mlp.parameters(), **config['optim_args'])
+        # self.scheduler = torch.optim.lr_scheduler.StepLR(self.optim, step_size=10, gamma=0.1)
 
         self.loss_fn = OUTPUT_TYPE_TO_LOSS_FN[config['output_type']]
 
@@ -94,7 +97,7 @@ class REMIND(nn.Module):
 
                 if not summarize:
                     outputs.append(output)
-                output.add_classification_summary(logits, batch_labels, split)
+                output.add_topk_classification_summary(logits, batch_labels, split, k=1)
                 outputs.append(output)
         else:          
             # NEED: Convert to CPU numpy
@@ -114,10 +117,12 @@ class REMIND(nn.Module):
 
             output = Output()
             output[f'loss/{split}'] = loss
+            output['predictions'] = logits.argmax(dim=-1).squeeze()
+            output['labels'] = y.squeeze(-1)
             if not summarize:
                 return output
 
-            output.add_classification_summary(logits, y, split)
+            output.add_topk_classification_summary(logits, y, split, k=1)
             outputs.append(output)
         # current_size = sum(len(sample) for sample in self.replay_buffer.values())
         # print("Current replay buffer size:", current_size)
@@ -193,7 +198,7 @@ class REMIND(nn.Module):
         # NEED: Convert to CPU numpy for PQ
         logit = logit.cpu().numpy() 
         # the shape is (b,1,512) there's a linear layer in the cnn encoder
-        logit = rearrange(logit, 'b 1 output_shape -> (b 1) output_shape', b=1600, output_shape=self.config['num_channels'])
+        logit = rearrange(logit, 'b 1 output_shape -> (b 1) output_shape', b=5000, output_shape=self.config['num_channels'])
         self.pq.train(logit)  # Now CPU numpy 
         codes = self.pq.compute_codes(logit)  # Returns numpy
         # print("Initial codes shape:", codes.shape)
@@ -201,7 +206,7 @@ class REMIND(nn.Module):
         # print("Num codebooks:", self.pq.M)
         # print("Dimensionality:", self.pq.d)
         # print("Bits per codebook:", self.pq.nbits)
-        codes = rearrange(codes, '(b 1) num_codebooks -> b 1 num_codebooks', b=1600)
+        codes = rearrange(codes, '(b 1) num_codebooks -> b 1 num_codebooks', b=5000)
         return codes
 
     def initialise_buffer_with_initial_data(self, train_x_initial, train_y_initial):

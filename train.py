@@ -123,7 +123,7 @@ def main():
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
     print(f'Config saved to {config_save_path}')
-    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA_{args.run_name}")
+    wandb_logger = None #init_wandb(config, name=f"{config['model']}_CASIA_{args.run_name}")
 
     # Save code
     if not args.no_backup:
@@ -287,12 +287,12 @@ def train(rank, world_size, port, args, config, wandb_logger):
                     meta_train_acc = output['acc/train'].mean()
                 print(f' | Meta-train acc: {meta_train_acc:.6f}', end='')
 
-                wandb_logger.log({
-                "train_accuracy": meta_train_acc,
-                "train_meta_loss": meta_train_loss,
-                "test_accuracy": meta_test_acc,
-                "test_meta_loss": meta_test_loss,
-            }, step=step)
+            #     wandb_logger.log({
+            #     "train_accuracy": meta_train_acc,
+            #     "train_meta_loss": meta_train_loss,
+            #     "test_accuracy": meta_test_acc,
+            #     "test_meta_loss": meta_test_loss,
+            # }, step=step)
 
                 if torch.isnan(meta_train_loss).any().item():
                     raise RuntimeError('NaN loss encountered')
@@ -352,7 +352,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
                         print(f' | Meta-test acc: {meta_test_acc:.4f}', end='')
 
             model.train()
-    wandb.finish()
+    # wandb.finish()
     if rank == 0:
         writer.flush()
         end_time = datetime.now()

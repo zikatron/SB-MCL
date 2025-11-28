@@ -1,3 +1,4 @@
+from models.remind import REMIND
 from .model import Model
 from .pn import PN
 from .gemcl import GeMCL
@@ -12,6 +13,7 @@ from .sbmcl_vae import SbmclVae
 from .std_diffusion import StdDDPM
 from .sbmcl_diffusion import SbmclDDPM
 from .continual_transformer import ContinualTransformer
+from .remind import REMIND
 
 MODEL = {
     'PN': PN,
@@ -27,5 +29,5 @@ MODEL = {
     'StdDDPM': StdDDPM,
     'SbmclDDPM': SbmclDDPM,
     'ContinualTransformer': ContinualTransformer,
-    'REMIND': Std,  # REMIND uses the same architecture as Std
+    'REMIND': Std, # * assumes remind has been trained/initialised and the weights are saved
 }

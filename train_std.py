@@ -38,7 +38,7 @@ torch.backends.cudnn.allow_tf32 = True
 
 
 def main():
-    os.environ['WANDB_API_KEY'] =
+    os.environ['WANDB_API_KEY'] = 'af68f61230db91e3ba854d69c29437700c715fc4'
 
     if torch.cuda.is_available():
         print(f'Running on {socket.gethostname()} | {torch.cuda.device_count()}x {torch.cuda.get_device_name()}')
@@ -87,7 +87,7 @@ def main():
     with open(config_save_path, 'w') as f:
         yaml.dump(config, f)
     print(f'Config saved to {config_save_path}')
-    wandb_logger = init_wandb(config, name=f"{config['model']}_CASIA_{args.run_name}_seed{args.run_number}")
+    wandb_logger = init_wandb(config, name=f"{config['model']}_{config['dataset']}_{args.run_name}_seed{args.run_number}")
 
 
     # Save code
@@ -112,7 +112,7 @@ def main():
     sock.close()
 
     # Start DDP
-    world_size = torch.cuda.device_count()
+    world_size = 1 #torch.cuda.device_count()
     if world_size > 1:
         assert config['batch_size'] % world_size == 0, 'Batch size must be divisible by the number of GPUs.'
         config['batch_size'] //= world_size
@@ -163,7 +163,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
     meta_test_set = Dataset(config, root='./data', meta_split='test')
     meta_test_loader = DataLoader(
         meta_test_set,
-        batch_size=config['eval_batch_size'],
+        batch_size=1,
         num_workers=config['num_workers'],
         collate_fn=meta_test_set.collate_fn)
     train_x, train_y, test_x, test_y = next(iter(meta_test_loader))
@@ -195,7 +195,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
     train_acc = 0
 
     step = 0
-    num_epochs = 160 // world_size
+    num_epochs = 40 // world_size
     
     #every epoch should have 625 steps with a thousand tasks and 10 shots
 
@@ -262,23 +262,23 @@ def train(rank, world_size, port, args, config, wandb_logger):
                     if 'acc/test' in output:
                         test_acc = output['acc/test'].mean()
                     print(f'[Step {step}] Test loss: {test_loss:.6f}')
-                    if test_loss < best_test_loss:
+                    if best_test_acc < test_acc:
                         best_test_loss = test_loss
                         best_step = step
                         best_test_acc = test_acc
                 model.train()
 
-    if rank == 0:
-        # Save checkpoint
-        new_ckpt_path = path.join(config['log_dir'], f'ckpt-{step:06}.pt')
-        torch.save({
-            'step': step,
-            'config': config,
-            'model': model.state_dict(),
-            'optim': optim.state_dict(),
-            'lr_sched': lr_sched.state_dict(),
-        }, new_ckpt_path)
-        print(f'\nCheckpoint saved to {new_ckpt_path}')
+    # if rank == 0:
+    #     # Save checkpoint
+    #     new_ckpt_path = path.join(config['log_dir'], f'ckpt-{step:06}.pt')
+    #     torch.save({
+    #         'step': step,
+    #         'config': config,
+    #         'model': model.state_dict(),
+    #         'optim': optim.state_dict(),
+    #         'lr_sched': lr_sched.state_dict(),
+    #     }, new_ckpt_path)
+    #     print(f'\nCheckpoint saved to {new_ckpt_path}')
 
     if rank == 0:
         writer.flush()
@@ -293,8 +293,8 @@ def train(rank, world_size, port, args, config, wandb_logger):
                     'best_step': best_step,
                     'best_test_loss': best_test_loss.item(),
                     'best_test_acc': best_test_acc.item(),
-                    'final_test_loss': test_loss.item(),  # NEW
-                    'final_test_acc': test_acc.item(),  # NEW
+                    'final_test_loss': test_loss.item(),
+                    'final_test_acc': test_acc.item(),
                 }, f)
 
     wandb.finish()

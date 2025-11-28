@@ -96,3 +96,21 @@ class Output(dict):
         self['prior/log_pre/std'] = rearrange(prior_log_pre.std(), '-> 1')
         self['prior/log_pre/min'] = rearrange(prior_log_pre.min(), '-> 1')
         self['prior/log_pre/max'] = rearrange(prior_log_pre.max(), '-> 1')
+
+    def add_topk_classification_summary(self, logit, test_y, meta_split, k=10):
+            # Get top-k predictions' indices. Shape: (b, l, k)
+            topk_preds = logit.topk(k, dim=-1).indices
+            
+            # Compare top-k preds with ground truth.
+            # test_y.unsqueeze(-1) gives shape (b, l, 1)
+            # correct_at_k gets shape (b, l, k) via broadcasting
+            correct_at_k = topk_preds.eq(test_y.unsqueeze(-1))
+            
+            # **** THIS IS THE FIX ****
+            # Check if the correct label exists *anywhere* in the k predictions
+            # This collapses the k dimension, resulting in shape (b, l)
+            is_topk_correct = correct_at_k.any(dim=-1)
+            
+            # Now, calculate the mean accuracy over the 'l' dimension
+            # This is the same reduction as your original top-1 'add_classification_summary'
+            self[f'top{k}_acc/{meta_split}'] = reduce(is_topk_correct.float(), 'b l -> b', 'mean')
