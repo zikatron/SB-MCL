@@ -30,7 +30,7 @@ parser.add_argument('--log-dir', '-l')
 parser.add_argument('--override', '-o', default='')
 parser.add_argument('--resume', action='store_true')
 parser.add_argument('--no-backup', action='store_true')
-parser.add_argument('--run-name', '-rn', default='i_didnt_set_a_name_lol')
+parser.add_argument('--run-name', '-rn', default='initialise_remind_train_std')
 parser.add_argument("--run_number", "-s", default=0)
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -112,7 +112,7 @@ def main():
     sock.close()
 
     # Start DDP
-    world_size = 1 #torch.cuda.device_count()
+    world_size = 1#torch.cuda.device_count()
     if world_size > 1:
         assert config['batch_size'] % world_size == 0, 'Batch size must be divisible by the number of GPUs.'
         config['batch_size'] //= world_size
@@ -160,7 +160,7 @@ def train(rank, world_size, port, args, config, wandb_logger):
 
     # Data
     Dataset = DATASET[config['dataset']]
-    meta_test_set = Dataset(config, root='./data', meta_split='test')
+    meta_test_set = Dataset(config, root='./data', meta_split='test', seed_classes=args.run_number, model=config['model'])
     meta_test_loader = DataLoader(
         meta_test_set,
         batch_size=1,
@@ -195,9 +195,10 @@ def train(rank, world_size, port, args, config, wandb_logger):
     train_acc = 0
 
     step = 0
-    num_epochs = 40 // world_size
+    num_epochs = 80 // world_size
     
-    #every epoch should have 625 steps with a thousand tasks and 10 shots
+    #every epoch should have 625 steps with a 1000 tasks and 10 shots
+    # size of data (shots * tasks) / batch size = steps per epoch
 
     for _ in range(num_epochs):
         train_loader = DataLoader(
@@ -266,19 +267,17 @@ def train(rank, world_size, port, args, config, wandb_logger):
                         best_test_loss = test_loss
                         best_step = step
                         best_test_acc = test_acc
+                        # Save checkpoint
+                        new_ckpt_path = path.join(config['log_dir'], 'ckpt-best_model.pt')
+                        torch.save({
+                            'step': step,
+                            'config': config,
+                            'model': model.state_dict(),
+                            'optim': optim.state_dict(),
+                            'lr_sched': lr_sched.state_dict(),
+                        }, new_ckpt_path)
+                        print(f'\nCheckpoint saved to {new_ckpt_path}')
                 model.train()
-
-    # if rank == 0:
-    #     # Save checkpoint
-    #     new_ckpt_path = path.join(config['log_dir'], f'ckpt-{step:06}.pt')
-    #     torch.save({
-    #         'step': step,
-    #         'config': config,
-    #         'model': model.state_dict(),
-    #         'optim': optim.state_dict(),
-    #         'lr_sched': lr_sched.state_dict(),
-    #     }, new_ckpt_path)
-    #     print(f'\nCheckpoint saved to {new_ckpt_path}')
 
     if rank == 0:
         writer.flush()
@@ -293,8 +292,8 @@ def train(rank, world_size, port, args, config, wandb_logger):
                     'best_step': best_step,
                     'best_test_loss': best_test_loss.item(),
                     'best_test_acc': best_test_acc.item(),
-                    'final_test_loss': test_loss.item(),
-                    'final_test_acc': test_acc.item(),
+                    'final_test_loss': test_loss.item(),  # NEW
+                    'final_test_acc': test_acc.item(),  # NEW
                 }, f)
 
     wandb.finish()

@@ -87,6 +87,8 @@ class OML(Model, MamlModule):
             output.add_classification_summary(logit, test_y, meta_split)
         elif self.config['output_type'] == 'image':
             output.add_image_comparison_summary(test_x, test_y, test_x, logit, key=f'completion/meta_{meta_split}')
+        if meta_split == 'test':
+            output['predictions'] = logit.argmax(dim=-1)
         return output
 
     def forward_train(self, train_x, train_y, inner_lr, is_meta_training):
@@ -101,5 +103,13 @@ class OML(Model, MamlModule):
                 mlp_out = self.maml_mlp(x_i)
                 logit = self.decoder(mlp_out)
                 loss = reduce(self.loss_fn(logit, y_i), 'b ... -> b', 'mean').sum()
-                self.inner_update(loss, inner_lr, is_meta_training=is_meta_training)
+                # self.inner_update(loss, inner_lr, is_meta_training=is_meta_training)
+
+                if is_meta_training:
+                    # Meta-training: update all layers
+                    self.inner_update(loss, inner_lr, is_meta_training=is_meta_training)
+                else:
+                    # Meta-testing: update only last layer
+                    last_layer = self.maml_mlp.mlp[-1]
+                    last_layer.inner_update(loss, inner_lr, is_meta_training=is_meta_training)
 

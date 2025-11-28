@@ -1,6 +1,6 @@
 include: cfg/model/base.yaml
 
-model: Std
+model: REMIND
 
 # Training
 batch_size: 16
@@ -13,4 +13,4 @@ lr_sched_args:
   gamma: 1
 
 summary_interval: 50
-eval_interval: 625
+eval_interval: 100

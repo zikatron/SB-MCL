@@ -3,7 +3,9 @@ dataset: omniglot
 input_type: image  # image or vector
 output_type: class  # class or vector
 
-tasks: 10
+meta_test_tasks: 1000
+
+tasks: 1000
 train_shots: 10
 test_shots: 10
 

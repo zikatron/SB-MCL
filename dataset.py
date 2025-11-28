@@ -10,7 +10,7 @@ from glob import glob
 from io import BytesIO
 from multiprocessing import Pool
 
-import cv2
+# import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -27,132 +27,80 @@ from utils import Timer
 def get_y(tasks, shots):
     return repeat(torch.arange(tasks), 't -> (t s)', s=shots)
 
+def get_samples(dataset, classes, convert_L=False):
+    # Sample examples for each class
+    train_x = []
+    test_x = []
+    for cls in classes:
+        cls_imgs = dataset.x_dict[cls]
+        cls_cache = dataset.cache[cls]
+        random.seed(dataset.seed_classes)  # Reset seed
+        sampled_indices = random.sample(
+            range(len(cls_imgs)), dataset.config['train_shots'] + dataset.config['test_shots'])
+
+        # Load sampled images
+        imgs = []
+        for idx in sampled_indices:
+            if idx not in cls_cache:
+                img_bytes = cls_imgs[idx]
+                img = Image.open(BytesIO(img_bytes)) if not convert_L else Image.open(BytesIO(img_bytes)).convert('L')
+                img = img.resize((32, 32), resample=Image.BILINEAR) if convert_L else img
+                img = pil_to_tensor(img)
+                cls_cache[idx] = img
+                cls_imgs[idx] = None
+            imgs.append(cls_cache[idx])
+
+        train_imgs = imgs[:dataset.config['train_shots']]
+        test_imgs = imgs[dataset.config['train_shots']:]
+        train_x.extend(train_imgs)
+        test_x.extend(test_imgs)
+
+    train_x = torch.stack(train_x)
+    test_x = torch.stack(test_x)
+    if dataset.model == 'REMIND':
+        num_classes = len(classes)
+        train_y = get_y(num_classes, dataset.config['train_shots'])
+        test_y = get_y(num_classes, dataset.config['test_shots'])
+    else:
+        train_y = get_y(dataset.config['tasks'], dataset.config['train_shots'])
+        test_y = get_y(dataset.config['tasks'], dataset.config['test_shots'])
+    random.seed()  # Reset seed
+    return train_x, train_y, test_x, test_y
 
 class MetaOmniglot(IterableDataset):
-    data = None
+    """Omniglot dataset with CASIA-style fixed splits and no augmentations"""
+    x_dict = None
+    meta_train_classes = None
+    meta_test_classes = None
 
-    def __init__(self, config, root='./data', meta_split='train'):
+    def __init__(self, config, root='./data', meta_split='train', seed_classes=None, model=None):
         super().__init__()
 
         self.config = config
         self.root = root
         self.data_dir = path.join(root, 'omniglot')
-        self.pickle_path = path.join(self.data_dir, 'omniglot.pickle')
+        self.pickle_path = path.join(self.data_dir, 'omniglot_fixed.pickle')
         self.meta_split = meta_split
         self.collate_fn = None
+        self.seed_classes = seed_classes
+        self.model = model
 
         if not path.exists(self.pickle_path):
-            print('Building pickle file...')
-            self.build_pickle()
-
-        if self.data is None:
-            with open(self.pickle_path, 'rb') as f, Timer('Pickle file loaded in {:.3f}s'):
-                type(self).data = pickle.load(f)
-
-        # Augment meta-training classes with rotations and flips
-        rotations = [0, 1, 2, 3] if meta_split == 'train' else [0]
-        flips = [0, 1] if meta_split == 'train' else [0]
-
-        print('Decoding images...')
-        self.split_data = {}
-        self.classes = list(self.data[meta_split].keys())
-        for cls in tqdm(self.classes):
-            cls_imgs = [[] for _ in range(len(rotations) * len(flips))]
-            for img_bytes in self.data[meta_split][cls]:
-                img = Image.open(BytesIO(img_bytes)).convert('L')
-                img = img.resize((32, 32), resample=Image.BILINEAR)
-                for rotation in rotations:
-                    for flip in flips:
-                        img = img.rotate(rotation * 90)
-                        if flip:
-                            img = img.transpose(Image.FLIP_LEFT_RIGHT)
-                        cls_imgs[rotation * 2 + flip].append(pil_to_tensor(img))
-            for rotation in rotations:
-                for flip in flips:
-                    self.split_data[(cls, rotation, flip)] = cls_imgs[rotation * 2 + flip]
-        self.classes = list(self.split_data.keys())
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        # Sample a sequence of classes
-        classes = random.sample(self.classes, self.config['tasks'])
-
-        # Sample examples for each class
-        train_x = []
-        test_x = []
-        for cls in classes:
-            sampled_imgs = random.sample(
-                self.split_data[cls], self.config['train_shots'] + self.config['test_shots'])
-            train_imgs = sampled_imgs[:self.config['train_shots']]
-            test_imgs = sampled_imgs[self.config['train_shots']:]
-            train_x.extend(train_imgs)
-            test_x.extend(test_imgs)
-
-        train_x = torch.stack(train_x)
-        test_x = torch.stack(test_x)
-        train_y = get_y(self.config['tasks'], self.config['train_shots'])
-        test_y = get_y(self.config['tasks'], self.config['test_shots'])
-
-        return train_x, train_y, test_x, test_y
-
-    def build_pickle(self):
-        splits = {
-            'train': Omniglot(self.data_dir, background=True, download=True),
-            'test': Omniglot(self.data_dir, background=False, download=True)
-        }
-        data = {
-            'train': {},
-            'test': {}
-        }
-        for split, omniglot in splits.items():
-            print(f'Building {split} split...')
-            split_dict = data[split]
-            for c, character in enumerate(tqdm(omniglot._characters)):
-                split_dict[character] = []
-                for i, (image_name, _) in enumerate(omniglot._character_images[c]):
-                    with open(path.join(omniglot.target_folder, character, image_name), 'rb') as img_f:
-                        img_bytes = img_f.read()
-                    split_dict[character].append(img_bytes)
-        with open(self.pickle_path + '.tmp', 'wb') as pickle_file:
-            pickle.dump(data, pickle_file)
-        os.rename(self.pickle_path + '.tmp', self.pickle_path)
-
-    def get_tensor_dataset(self, x, y):
-        return TensorDataset(x, y)
-
-
-class MetaCasia(IterableDataset):
-    name = 'casia-hwdb'
-    meta_train_classes = None
-    meta_test_classes = None
-    x_dict = None
-    y_dict = None
-
-    def __init__(self, config, root='./data', meta_split='train'):
-        super().__init__()
-        self.config = config
-        self.root = root
-        self.data_dir = path.join(root, self.name)
-        self.meta_split = meta_split
-        self.pickle_path = path.join(self.data_dir, f'{self.name}.pickle')
-        self.collate_fn = None
-
-        if not path.exists(self.pickle_path):
-            self.download()
+            print('Building pickle file for fixed Omniglot...')
             self.build_pickle()
 
         if self.x_dict is None:
-            with open(self.pickle_path, 'rb') as pickle_file, Timer('Pickle file loaded in {:.3f}s'):
-                type(self).x_dict, type(self).y_dict = pickle.load(pickle_file)
+            with open(self.pickle_path, 'rb') as f, Timer('Pickle file loaded in {:.3f}s'):
+                type(self).x_dict = pickle.load(f)
 
         if self.meta_train_classes is None:
             classes = list(self.x_dict.keys())
-            random.seed(0)  # Make sure the same splits are used for all runs
+            random.seed(42)  # Make sure the same splits are used for all runs
             random.shuffle(classes)
             type(self).meta_train_classes = classes[config['meta_test_tasks']:]
             type(self).meta_test_classes = classes[:config['meta_test_tasks']]
+            print(f'Meta-train classes: {len(self.meta_train_classes)}')
+            print(f'Meta-test classes: {len(self.meta_test_classes)}')
             random.seed()  # Reset seed
 
         if self.meta_split == 'train':
@@ -169,39 +117,197 @@ class MetaCasia(IterableDataset):
 
     def __next__(self):
         # Sample a sequence of classes
+        if self.seed_classes is not None:
+            random.seed(self.seed_classes)  # Ensure same classes. This is mainly for the REMIND experiments
         classes = random.sample(self.classes, self.config['tasks'])
+        random.seed()  # Reset seed
 
-        # Sample examples for each class
-        train_x = []
-        test_x = []
-        for cls in classes:
-            cls_imgs = self.x_dict[cls]
-            cls_cache = self.cache[cls]
-            sampled_indices = random.sample(
-                range(len(cls_imgs)), self.config['train_shots'] + self.config['test_shots'])
+        if self.model == 'REMIND':
+            return get_samples(self, classes[:500], convert_L=True), get_samples(self, classes[500:], convert_L=True)
+        else:
+            return get_samples(self, classes, convert_L=True)
 
-            # Load sampled images
-            imgs = []
-            for idx in sampled_indices:
-                if idx not in cls_cache:
-                    img_bytes = cls_imgs[idx]
-                    img = Image.open(BytesIO(img_bytes))
-                    img = pil_to_tensor(img)
-                    cls_cache[idx] = img
-                    cls_imgs[idx] = None
-                imgs.append(cls_cache[idx])
+    def build_pickle(self):
+        # Load both background and evaluation sets
+        splits = {
+            'background': Omniglot(self.data_dir, background=True, download=True),
+            'evaluation': Omniglot(self.data_dir, background=False, download=True)
+        }
+        
+        x_dict = {}
+        class_id = 0
+        
+        for split_name, omniglot in splits.items():
+            print(f'Building {split_name} split...')
+            for c, character in enumerate(tqdm(omniglot._characters)):
+                x_dict[class_id] = []
+                for i, (image_name, _) in enumerate(omniglot._character_images[c]):
+                    with open(path.join(omniglot.target_folder, character, image_name), 'rb') as img_f:
+                        img_bytes = img_f.read()
+                    x_dict[class_id].append(img_bytes)
+                class_id += 1
+        
+        print(f'Total classes: {len(x_dict)}')
+        with open(self.pickle_path + '.tmp', 'wb') as pickle_file:
+            pickle.dump(x_dict, pickle_file)
+        os.rename(self.pickle_path + '.tmp', self.pickle_path)
 
-            train_imgs = imgs[:self.config['train_shots']]
-            test_imgs = imgs[self.config['train_shots']:]
-            train_x.extend(train_imgs)
-            test_x.extend(test_imgs)
+    def get_tensor_dataset(self, x, y):
+        return TensorDataset(x, y)
+    
+# class MetaOmniglot(IterableDataset):
+#     data = None
 
-        train_x = torch.stack(train_x)
-        test_x = torch.stack(test_x)
-        train_y = get_y(self.config['tasks'], self.config['train_shots'])
-        test_y = get_y(self.config['tasks'], self.config['test_shots'])
+#     def __init__(self, config, root='./data', meta_split='train'):
+#         super().__init__()
 
-        return train_x, train_y, test_x, test_y
+#         self.config = config
+#         self.root = root
+#         self.data_dir = path.join(root, 'omniglot')
+#         self.pickle_path = path.join(self.data_dir, 'omniglot.pickle')
+#         self.meta_split = meta_split
+#         self.collate_fn = None
+
+#         if not path.exists(self.pickle_path):
+#             print('Building pickle file...')
+#             self.build_pickle()
+
+#         if self.data is None:
+#             with open(self.pickle_path, 'rb') as f, Timer('Pickle file loaded in {:.3f}s'):
+#                 type(self).data = pickle.load(f)
+
+#         # Augment meta-training classes with rotations and flips
+#         rotations = [0, 1, 2, 3] if meta_split == 'train' else [0]
+#         flips = [0, 1] if meta_split == 'train' else [0]
+
+#         print('Decoding images...')
+#         self.split_data = {}
+#         self.classes = list(self.data[meta_split].keys())
+#         for cls in tqdm(self.classes):
+#             cls_imgs = [[] for _ in range(len(rotations) * len(flips))]
+#             for img_bytes in self.data[meta_split][cls]:
+#                 img = Image.open(BytesIO(img_bytes)).convert('L')
+#                 img = img.resize((32, 32), resample=Image.BILINEAR)
+#                 for rotation in rotations:
+#                     for flip in flips:
+#                         img = img.rotate(rotation * 90)
+#                         if flip:
+#                             img = img.transpose(Image.FLIP_LEFT_RIGHT)
+#                         cls_imgs[rotation * 2 + flip].append(pil_to_tensor(img))
+#             for rotation in rotations:
+#                 for flip in flips:
+#                     self.split_data[(cls, rotation, flip)] = cls_imgs[rotation * 2 + flip]
+#         self.classes = list(self.split_data.keys())
+
+#     def __iter__(self):
+#         return self
+
+#     def __next__(self):
+#         # Sample a sequence of classes
+#         classes = random.sample(self.classes, self.config['tasks'])
+
+#         # Sample examples for each class
+#         train_x = []
+#         test_x = []
+#         for cls in classes:
+#             sampled_imgs = random.sample(
+#                 self.split_data[cls], self.config['train_shots'] + self.config['test_shots'])
+#             train_imgs = sampled_imgs[:self.config['train_shots']]
+#             test_imgs = sampled_imgs[self.config['train_shots']:]
+#             train_x.extend(train_imgs)
+#             test_x.extend(test_imgs)
+
+#         train_x = torch.stack(train_x)
+#         test_x = torch.stack(test_x)
+#         train_y = get_y(self.config['tasks'], self.config['train_shots'])
+#         test_y = get_y(self.config['tasks'], self.config['test_shots'])
+
+#         return train_x, train_y, test_x, test_y
+
+#     def build_pickle(self):
+#         splits = {
+#             'train': Omniglot(self.data_dir, background=True, download=True),
+#             'test': Omniglot(self.data_dir, background=False, download=True)
+#         }
+#         data = {
+#             'train': {},
+#             'test': {}
+#         }
+#         for split, omniglot in splits.items():
+#             print(f'Building {split} split...')
+#             split_dict = data[split]
+#             for c, character in enumerate(tqdm(omniglot._characters)):
+#                 split_dict[character] = []
+#                 for i, (image_name, _) in enumerate(omniglot._character_images[c]):
+#                     with open(path.join(omniglot.target_folder, character, image_name), 'rb') as img_f:
+#                         img_bytes = img_f.read()
+#                     split_dict[character].append(img_bytes)
+#         with open(self.pickle_path + '.tmp', 'wb') as pickle_file:
+#             pickle.dump(data, pickle_file)
+#         os.rename(self.pickle_path + '.tmp', self.pickle_path)
+
+#     def get_tensor_dataset(self, x, y):
+#         return TensorDataset(x, y)
+
+
+class MetaCasia(IterableDataset):
+    name = 'casia-hwdb'
+    meta_train_classes = None
+    meta_test_classes = None
+    x_dict = None
+    y_dict = None
+
+    def __init__(self, config, root='./data', meta_split='train', seed_classes=None, model=None):
+        super().__init__()
+        self.config = config
+        self.root = root
+        self.data_dir = path.join(root, self.name)
+        self.meta_split = meta_split
+        self.pickle_path = path.join(self.data_dir, f'{self.name}.pickle')
+        self.collate_fn = None
+        self.seed_classes = seed_classes
+        self.model = model
+        if not path.exists(self.pickle_path):
+            self.download()
+            self.build_pickle()
+
+        if self.x_dict is None:
+            with open(self.pickle_path, 'rb') as pickle_file, Timer('Pickle file loaded in {:.3f}s'):
+                type(self).x_dict, type(self).y_dict = pickle.load(pickle_file)
+
+        if self.meta_train_classes is None:
+            classes = list(self.x_dict.keys())
+            random.seed(42)  # Make sure the same splits are used for all runs
+            random.shuffle(classes)
+            type(self).meta_train_classes = classes[config['meta_test_tasks']:]
+            type(self).meta_test_classes = classes[:config['meta_test_tasks']]
+            print(f'Meta-train classes: {len(self.meta_train_classes)}')
+            print(f'Meta-test classes: {len(self.meta_test_classes)}')
+            random.seed()  # Reset seed
+
+        if self.meta_split == 'train':
+            self.classes = self.meta_train_classes
+        elif self.meta_split == 'test':
+            self.classes = self.meta_test_classes
+        else:
+            raise ValueError('Unknown meta_split: {}'.format(self.meta_split))
+
+        self.cache = {cls: {} for cls in self.classes}
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        # Sample a sequence of classes
+        if self.seed_classes is not None:
+            random.seed(self.seed_classes)  # Ensure same classes. This is mainly for the REMIND experiments
+        classes = random.sample(self.classes, self.config['tasks'])
+        random.seed()  # Reset seed
+
+        if self.model == 'REMIND':
+            return get_samples(self, classes[:500]), get_samples(self, classes[500:])
+        else:
+            return get_samples(self, classes)
 
     def download(self):
         download_links = [

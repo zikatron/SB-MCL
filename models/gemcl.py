@@ -21,18 +21,51 @@ class GeMCL(Model):
         self.alpha = nn.Parameter(torch.tensor(100.), requires_grad=True)
         self.beta = nn.Parameter(torch.tensor(1000.), requires_grad=True)
 
-    def forward(self, train_x, train_y, test_x, test_y, summarize, meta_split):
+    def forward(self, train_x, train_y, test_x, test_y, summarize, meta_split, sequential_class_by_class=True):
         batch, test_num = test_y.shape
         train_x_enc, test_x_enc = self.encode_x(train_x, test_x)
 
+        # Configuration
+        tasks = self.config['tasks']
+        shots = self.config['train_shots']
+        dim = train_x_enc.shape[-1]
+        # 1. Reshape to separate tasks: [Batch, Tasks, Shots, Dim]
+        train_x_reshaped = rearrange(train_x_enc, 'b (t s) d -> b t s d', t=tasks, s=shots)
+        
+        # 2. Initialize empty storage for all class parameters
+        # We build the full model parameter set piece by piece
+        prototypes = torch.zeros(batch, tasks, dim, device=train_x_enc.device)
+        squared_diff = torch.zeros(batch, tasks, dim, device=train_x_enc.device)
+        
+        # 3. Sequential Loop (Class by Class)
+        for t in range(tasks):
+            # Extract all data for the current Task 't'
+            # shape: [Batch, Shots, Dim]
+            task_data = train_x_reshaped[:, t, :, :]
+            
+            # --- Learning Step for Task 't' ---
+            # Since we have all shots for this class, we can use standard batch stats
+            # This calculates the mean across the 'Shots' dimension
+            task_mean = task_data.mean(dim=1) 
+            
+            # Calculate sum of squared differences for this class
+            # (x - mean)^2
+            # We unsqueeze mean to broadcast over shots: [Batch, 1, Dim]
+            task_ssd = (task_data - task_mean.unsqueeze(1)).square().sum(dim=1)
+            
+            # --- Store Knowledge ---
+            # Place the learned parameters into the global model storage
+            prototypes[:, t, :] = task_mean
+            squared_diff[:, t, :] = task_ssd
+
         # Train
-        prototypes = reduce(
-            train_x_enc, 'b (t s) d -> b t d', 'mean', t=self.config['tasks'], s=self.config['train_shots'])
-        squared_diff = (
-                rearrange(train_x_enc, 'b (t s) d -> b t s d', t=self.config['tasks']) -
-                rearrange(prototypes, 'b t d -> b t 1 d')
-        ).square()
-        squared_diff = reduce(squared_diff, 'b t s d -> b t d', 'sum')
+        # prototypes = reduce(
+        #     train_x_enc, 'b (t s) d -> b t d', 'mean', t=self.config['tasks'], s=self.config['train_shots'])
+        # squared_diff = (
+        #         rearrange(train_x_enc, 'b (t s) d -> b t s d', t=self.config['tasks']) -
+        #         rearrange(prototypes, 'b t d -> b t 1 d')
+        # ).square()
+        # squared_diff = reduce(squared_diff, 'b t s d -> b t d', 'sum')
 
         alpha_prime = self.alpha + self.config['train_shots'] / 2
         beta_prime = self.beta + squared_diff / 2
@@ -62,6 +95,8 @@ class GeMCL(Model):
 
         output = Output()
         output[f'loss/meta_{meta_split}'] = loss
+        if meta_split == 'test':
+            output['predictions'] = logit.argmax(dim=-1)
         if not summarize:
             return output
 

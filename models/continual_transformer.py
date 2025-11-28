@@ -401,6 +401,8 @@ class ContinualTransformer(Model):
         if self.output_type == 'class':
             logit = rearrange(logit, 'b (n y) v -> b n y v', n=test_num, y=y_len)
             loss = self.loss_fn(logit, test_y_code)
+
+                
         elif self.output_type == 'vector':
             loss = reduce(((logit - test_y) ** 2), 'b n h -> b n', 'mean')
         elif self.output_type == 'angle':
@@ -417,6 +419,10 @@ class ContinualTransformer(Model):
             loss = loss_weight * loss
 
         output = Output()
+        if meta_split == 'test':
+            if y_len == 1:
+                prediction = logit.squeeze(-2)
+            output['predictions'] = prediction.argmax(dim=-1)
         output[f'loss/meta_{meta_split}'] = reduce(loss, 'b ... -> b', 'mean')
 
         # Compute attention loss
