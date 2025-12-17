@@ -125,9 +125,8 @@ def init_wandb(config, name, tags=None, group=None, notes=None):
     Returns:
         wandb.Run: The initialized W&B run object
     """
+    # Enter entity and project information as needed.
     return wandb.init(
-        entity="bytefuse",
-        project="pushing-the-limits-of-meta-cl",
         config=config,
         name=name,
         tags=tags,
