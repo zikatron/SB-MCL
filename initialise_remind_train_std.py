@@ -38,7 +38,6 @@ torch.backends.cudnn.allow_tf32 = True
 
 
 def main():
-    os.environ['WANDB_API_KEY'] = 'af68f61230db91e3ba854d69c29437700c715fc4'
 
     if torch.cuda.is_available():
         print(f'Running on {socket.gethostname()} | {torch.cuda.device_count()}x {torch.cuda.get_device_name()}')

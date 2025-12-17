@@ -38,7 +38,6 @@ parser.add_argument('--run-name', '-rn', default='remind_cl_stage')
 parser.add_argument("--run_number", "-s", default=1)
 args = parser.parse_args()
 
-os.environ['WANDB_API_KEY'] = 'af68f61230db91e3ba854d69c29437700c715fc4'
 
 
 def load_config(path):

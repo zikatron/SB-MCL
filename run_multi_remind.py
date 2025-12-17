@@ -8,7 +8,7 @@ SCRIPT_NAME = "train_remind.py"
 
 # The base path to your experiments
 # This is the parent folder containing seed_1, seed_2, etc.
-BASE_EXP_DIR = "/home/bytefuse/batsi/SB-MCL/experiments/remind-casia-offline"
+BASE_EXP_DIR = "./experiments/remind-casia-offline"
 
 # Total number of seeds to run
 NUM_SEEDS = 20
